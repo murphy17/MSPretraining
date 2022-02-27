@@ -1,0 +1,1 @@
+{"Spectrum": {"sequence": "str", "charge": "int32", "collision_energy": "float32", "irt": "float32"}, "Modification": {"position": "int32", "residue": "str", "modification": "str"}, "Fragment": {"mz": "float32", "intensity": "float32", "ion": "str", "length": "int32", "loss": "str", "charge": "int32", "ppm": "float32"}}
