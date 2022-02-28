@@ -109,7 +109,9 @@ class MSTransformer(pl.LightningModule):
         x_tgt = x_tgt.expand(-1,max_bonds,-1)
         x_tgt = self.positional_encoding(x_tgt, offset=1, stride=2)
         x_tgt *= x_tgt_mask.unsqueeze(-1) # unsure
-            
+        
+        print(x_src.shape, x_tgt.shape, x_src_mask.shape, x_tgt_mask.shape)
+        
         y_pred = self.transformer(
             src=x_src,
             tgt=x_tgt,
@@ -121,7 +123,9 @@ class MSTransformer(pl.LightningModule):
         y_pred = self.classifier(y_pred)
         
         if not with_logits:
-            y_pred = torch.softmax(y_pred.flatten(1), dim=1).reshape(y_pred.shape)
+            y_pred = y_pred.flatten(1)
+            y_pred = torch.softmax(y_pred, dim=1)
+            y_pred = y_pred.reshape(y_pred.shape)
             
         y_pred = y_pred.reshape(-1, max_bonds, *self.output_dim)
         
@@ -136,8 +140,7 @@ class MSTransformer(pl.LightningModule):
         return loss
     
     def step(self, batch, predict_step=False):
-        batch_size, max_residues = batch['x'].shape[:2]
-        max_bonds = max_residues - 1
+        batch_size = batch['x'].shape[0]
 
         y = batch['y'].float()
         y_mask = batch['y_mask'].bool()
