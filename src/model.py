@@ -60,7 +60,7 @@ class MSTransformer(pl.LightningModule):
         
         self.residue_embedding = nn.Embedding(len(self.residues), model_dim)
         self.charge_embedding = nn.Embedding(len(self.parent_charges), model_dim)
-        self.energy_embedding = nn.Linear(1, model_dim)
+        self.ce_embedding = nn.Linear(1, model_dim)
 
         self.positional_encoding = PositionalEncoding(
             d_model=model_dim,
@@ -84,7 +84,7 @@ class MSTransformer(pl.LightningModule):
         self, 
         sequence, 
         charge,
-        collision_energy,
+        ce,
         sequence_mask=None, 
         fragment_mask=None,
         with_logits=False
@@ -104,8 +104,9 @@ class MSTransformer(pl.LightningModule):
         x_src = self.positional_encoding(x_src, offset=0, stride=2)
         x_src *= x_src_mask.unsqueeze(-1) # unsure
         
-        x_tgt = self.charge_embedding(charge) + self.energy_embedding(collision_energy)
-        x_tgt = x_tgt.unsqueeze(1).expand(-1,max_bonds)
+        x_tgt = self.charge_embedding(charge.unsqueeze(-1))
+        x_tgt += self.ce_embedding(ce.unsqueeze(-1)).unsqueeze(1)
+        x_tgt = x_tgt.expand(-1,max_bonds,-1)
         x_tgt = self.positional_encoding(x_tgt, offset=1, stride=2)
         x_tgt *= x_tgt_mask.unsqueeze(-1) # unsure
             
@@ -144,9 +145,9 @@ class MSTransformer(pl.LightningModule):
         y_pred = self(
             sequence=batch['x'].long(),
             charge=batch['charge'].long() - self.parent_charges[0],
-            collision_energy=batch['collision_energy'].float(),
+            ce=batch['collision_energy'].float(),
             sequence_mask=batch['x_mask'].bool(),
-            fragments_mask=batch['x_mask'][:,1:].bool()
+            fragment_mask=batch['x_mask'][:,1:].bool()
         )
         
         if predict_step:

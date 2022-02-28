@@ -63,12 +63,12 @@ class MSDataModule(LightningDataModule):
         )
         return dataloader
 
-    def valid_dataloader(self):
-        dataloader = DataLoader(
-            self.valid_dataset,
-            batch_size=self.batch_size,
-            collate_fn=zero_padding_collate,
-            num_workers=self.num_workers,
-            drop_last=False
-        )
-        return dataloader
+#     def val_dataloader(self):
+#         dataloader = DataLoader(
+#             self.valid_dataset,
+#             batch_size=self.batch_size,
+#             collate_fn=zero_padding_collate,
+#             num_workers=self.num_workers,
+#             drop_last=False
+#         )
+#         return dataloader
