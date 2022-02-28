@@ -55,7 +55,7 @@ def zero_padding_collate(items):
 
 def cache_path(path, cache_dir):
     [cache_dir] = bash(f'echo {cache_dir}')
-    bash(f'mkdir -p {self.cache_dir}')
+    bash(f'mkdir -p {cache_dir}')
     new_path = cache_dir + '/' + path.split('/')[-1]
     if not os.path.exists(new_path) or os.stat(new_path).st_size == 0:
         bash(f'cp -R "{path}" "{new_path}"')

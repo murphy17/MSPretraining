@@ -104,13 +104,15 @@ class MSTransformer(pl.LightningModule):
         x_src = self.positional_encoding(x_src, offset=0, stride=2)
         x_src *= x_src_mask.unsqueeze(-1) # unsure
         
-        x_tgt = self.charge_embedding(charge.unsqueeze(-1))
-        x_tgt += self.ce_embedding(ce.unsqueeze(-1)).unsqueeze(1)
-        x_tgt = x_tgt.expand(-1,max_bonds,-1)
+        # it is the CHARGE EMBEDDING that is problem.
+#         charge = charge.view(-1,1).expand(-1,max_bonds)
+#         x_tgt = self.charge_embedding(charge)
+        
+        ce = ce.view(-1,1).expand(-1,max_bonds)
+        x_tgt = self.ce_embedding(ce.unsqueeze(-1))
+
         x_tgt = self.positional_encoding(x_tgt, offset=1, stride=2)
         x_tgt *= x_tgt_mask.unsqueeze(-1) # unsure
-        
-        print(x_src.shape, x_tgt.shape, x_src_mask.shape, x_tgt_mask.shape)
         
         y_pred = self.transformer(
             src=x_src,
@@ -147,20 +149,20 @@ class MSTransformer(pl.LightningModule):
         
         y_pred = self(
             sequence=batch['x'].long(),
-            charge=batch['charge'].long() - self.parent_charges[0],
+            charge=batch['charge'].long() - min(self.parent_charges),
             ce=batch['collision_energy'].float(),
             sequence_mask=batch['x_mask'].bool(),
             fragment_mask=batch['x_mask'][:,1:].bool()
         )
         
-        if predict_step:
-            # renormalize to area of observed fragments
-            y_pred /= (y_pred * (y > 0)).flatten(1).sum(1)
-            y_pred *= y.flatten(1).sum(1)
-            return y_pred
-
         y_total = y.flatten(1).sum(1).view(batch_size,1,1,1,1)
         
+        if predict_step:
+            # renormalize to area of observed fragments
+            y_pred /= (y_pred * (y > 0)).flatten(1).sum(1).view(-1,1,1,1,1)
+            y_pred *= y_total
+            return y_pred
+
         loss = self.masked_loss(F.cross_entropy, y_pred, y / y_total, y_mask)
         
         err = self.masked_loss(
