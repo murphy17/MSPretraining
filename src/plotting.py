@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-def faststem(x, y, *args, **kwargs):
+def faststem(x, y, linewidth=1., *args, **kwargs):
     ord = np.argsort(x)
     x = x[ord]
     y = y[ord]
