@@ -100,3 +100,13 @@ class MSDataModule(LightningDataModule):
             drop_last=False
         )
         return dataloader
+    
+    def predict_dataloader(self):
+        dataloader = DataLoader(
+            self.val_dataset,
+            batch_size=1,
+            collate_fn=zero_padding_collate,
+            num_workers=self.num_workers,
+            drop_last=False
+        )
+        return dataloader

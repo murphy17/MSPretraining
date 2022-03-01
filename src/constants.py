@@ -18,7 +18,7 @@ class MSConstants:
         'c': 57.02146,
         'm': 15.99491461956
     }
-    min_charge = 2
+    min_charge = 1 # is this true!?!?
     max_charge = 7
     min_frag_charge = 1
     max_frag_charge = 2

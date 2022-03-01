@@ -47,7 +47,7 @@ class MSTransformer(pl.LightningModule):
         self.residues = residues
         self.ions = ions
         # have to include zero here because of the pad
-        self.parent_charges = range(parent_max_charge + 1)
+        self.parent_charges = range(parent_min_charge, parent_max_charge + 1)
         self.fragment_charges = range(fragment_min_charge, fragment_max_charge + 1)
         self.losses = losses
         
@@ -90,7 +90,7 @@ class MSTransformer(pl.LightningModule):
         fragment_mask=None,
         with_logits=False
     ):
-        batch_size, max_residues = sequence.shape[:2]
+        batch_size, max_residues = sequence.shape
         max_bonds = max_residues - 1
         
         if sequence_mask is None:
@@ -105,6 +105,7 @@ class MSTransformer(pl.LightningModule):
         x_src = self.positional_encoding(x_src, offset=0, stride=2)
         x_src *= x_src_mask.unsqueeze(-1) # unsure
         
+        charge = charge - min(self.parent_charges)
         charge = charge.view(-1,1).expand(-1,max_bonds)
         ce = ce.view(-1,1).expand(-1,max_bonds)
         x_tgt = (
@@ -149,7 +150,7 @@ class MSTransformer(pl.LightningModule):
         
         y_pred = self(
             sequence=batch['x'].long(),
-            charge=batch['charge'].long() - min(self.parent_charges),
+            charge=batch['charge'].long(),
             ce=batch['collision_energy'].float(),
             sequence_mask=batch['x_mask'].bool(),
             fragment_mask=batch['x_mask'][:,1:].bool()

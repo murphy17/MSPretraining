@@ -19,7 +19,7 @@ def encode_sequence(sequence):
     return codes
 
 def tensorize_fragments(intensities, bonds, ions, charges, losses, sequence, precursor_charge):
-    fragments = np.zeros((len(sequence)-1,len(C.ions),C.max_frag_charge,len(C.losses)), dtype=np.float32)
+    fragments = np.zeros((len(sequence)-1,len(C.ions),C.max_frag_charge+1-C.min_frag_charge,len(C.losses)), dtype=np.float32)
     for intensity, bond, ion, charge, loss in zip(intensities, bonds, ions, charges, losses):
         ion = C.ions.index(ion)
         charge = charge - 1
@@ -38,11 +38,11 @@ def tensorize_fragments(intensities, bonds, ions, charges, losses, sequence, pre
     return fragments, fragment_mask
 
 def fragment_mz_tensor(sequence):
-    masses = np.zeros((len(sequence)-1, len(C.ions), C.max_frag_charge, len(C.losses)), dtype=np.float32)
+    masses = np.zeros((len(sequence)-1, len(C.ions), C.max_frag_charge+1-C.min_frag_charge, len(C.losses)), dtype=np.float32)
     for bond in range(len(sequence)-1): # bond+1 !!!
         for i,ion in enumerate(C.ions):
             frag = sequence[:bond+1] if ion in C.n_term_ions else sequence[bond+1:]
-            for j,charge in enumerate(range(1,C.max_frag_charge+1)):
+            for j,charge in enumerate(range(C.min_frag_charge,C.max_frag_charge+1)):
                 for k,loss in enumerate(C.losses):
                     masses[bond,i,j,k] = compute_peptide_mz(frag, ion, charge, loss)
     return masses
