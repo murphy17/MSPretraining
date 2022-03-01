@@ -36,7 +36,13 @@ class MSPParser:
         [self.cache_dir] = bash(f'echo {cache_dir}')
         bash(f'mkdir -p {self.cache_dir}')
         
-        self.hdf_args = dict(format='table', append=True, min_itemsize=300, complevel=9, complib='blosc:lz4')
+        self.hdf_args = dict(
+            format='table', 
+            append=True, 
+            min_itemsize=300,
+            complevel=9, 
+            complib='blosc:lz4'
+        )
         self.re_match = re.compile(r'"([^\d]+)(\d+)(-[A-Z0-9]+)?(?:\^(\d+))?\/(-?\d+(?:\.\d+)?)ppm"')
         
         self.hdf = None
@@ -76,6 +82,7 @@ class MSPParser:
             self._cleanup_msp(msp_path)
         
         # bash(f'cp {self.hdf_path} {hdf_path}')
+        bash(f'chmod go-w {self.hdf_path}')
         
         return num_processed
     

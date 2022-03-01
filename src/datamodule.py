@@ -105,8 +105,8 @@ class MSDataModule(LightningDataModule):
         dataloader = DataLoader(
             self.val_dataset,
             batch_size=1,
-            collate_fn=zero_padding_collate,
-            num_workers=self.num_workers,
+#             collate_fn=zero_padding_collate,
+            num_workers=1,
             drop_last=False
         )
         return dataloader

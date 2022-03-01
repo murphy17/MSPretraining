@@ -33,7 +33,7 @@ def tensorize_fragments(intensities, bonds, ions, charges, losses, sequence, pre
     fragment_mzs = fragment_mz_tensor(sequence)
     fragment_mask[fragment_mzs < C.min_frag_mz] = 1
     fragment_mask[fragment_mzs > C.max_frag_mz] = 1
-    fragment_mask[:,:,np.arange(C.max_frag_charge) > precursor_charge-1] = 1
+    fragment_mask[:,:,np.arange(C.min_frag_charge,C.max_frag_charge+1) > precursor_charge] = 1
     
     return fragments, fragment_mask
 

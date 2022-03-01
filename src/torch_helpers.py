@@ -48,7 +48,8 @@ def zero_padding_collate(items):
         for k, max_shape in max_shapes.items():
             if len(max_shape) == 0:
                 continue
-            pad = np.stack([np.zeros_like(max_shape), max_shape - np.shape(item[k])]).T.astype(int)
+            pad = np.stack([np.zeros_like(max_shape), max_shape - np.shape(item[k])])
+            pad = pad.T.astype(int)
             item[k] = np.pad(item[k], pad)
     items = default_collate(items)
     return items
