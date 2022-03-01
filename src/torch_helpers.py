@@ -112,4 +112,4 @@ def start_tensorboard(login_node, tmux_name='tensorboard', logging_dir=None):
     script_path = os.path.dirname(os.path.abspath(__file__)) + '/tensorboard.sh'
 
     bash(f'chmod +x {script_path}')
-    bash(f'ssh {login_node} \'tmux kill-session -t {tmux_name}; tmux new-session -s tensorboard -d srun --resv-ports=1 --pty bash -i -c "{script_path} {logging_dir}"\'')
+    bash(f'ssh {login_node} \'tmux kill-session -t {tmux_name}; tmux new-session -s {tmux_name} -d srun --resv-ports=1 --pty bash -i -c "{script_path} {logging_dir}"\'')
