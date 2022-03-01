@@ -29,6 +29,7 @@ def tensorize_fragments(intensities, bonds, ions, charges, losses, sequence, pre
     # treat unsequenced fragments as missing, not zeros
     # and impossible fragments to observed zeros
     fragment_mask = np.zeros_like(fragments,dtype=np.int32)
+    fragment_mask[fragments > 0] = 1
     fragment_mzs = fragment_mz_tensor(sequence)
     fragment_mask[fragment_mzs < C.min_frag_mz] = 1
     fragment_mask[fragment_mzs > C.max_frag_mz] = 1

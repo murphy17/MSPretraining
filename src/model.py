@@ -46,7 +46,8 @@ class MSTransformer(pl.LightningModule):
         
         self.residues = residues
         self.ions = ions
-        self.parent_charges = range(parent_min_charge, parent_max_charge + 1)
+        # have to include zero here because of the pad
+        self.parent_charges = range(parent_max_charge + 1)
         self.fragment_charges = range(fragment_min_charge, fragment_max_charge + 1)
         self.losses = losses
         
@@ -104,13 +105,12 @@ class MSTransformer(pl.LightningModule):
         x_src = self.positional_encoding(x_src, offset=0, stride=2)
         x_src *= x_src_mask.unsqueeze(-1) # unsure
         
-        # it is the CHARGE EMBEDDING that is problem.
-#         charge = charge.view(-1,1).expand(-1,max_bonds)
-#         x_tgt = self.charge_embedding(charge)
-        
+        charge = charge.view(-1,1).expand(-1,max_bonds)
         ce = ce.view(-1,1).expand(-1,max_bonds)
-        x_tgt = self.ce_embedding(ce.unsqueeze(-1))
-
+        x_tgt = (
+            self.charge_embedding(charge) +
+            self.ce_embedding(ce.unsqueeze(-1))
+        )
         x_tgt = self.positional_encoding(x_tgt, offset=1, stride=2)
         x_tgt *= x_tgt_mask.unsqueeze(-1) # unsure
         
