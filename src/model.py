@@ -226,16 +226,18 @@ class MSTransformer(pl.LightningModule):
         return loss, err
     
     def training_step(self, batch, batch_idx):
+        batch_size = batch['x'].shape[0]
         loss, err = self.step(batch)
-        self.log('train_cross_entropy',loss)
-        self.log('train_rel_abs_err',err)
+        self.log('train_cross_entropy',loss,batch_size=batch_size)
+        self.log('train_rel_abs_err',err,batch_size=batch_size)
         return loss
     
 # this was hanging...
     def validation_step(self, batch, batch_idx):
+        batch_size = batch['x'].shape[0]
         loss, err = self.step(batch)
-        self.log('valid_cross_entropy',loss)
-        self.log('valid_rel_abs_err',err)
+        self.log('valid_cross_entropy',loss,batch_size=batch_size,sync_dist=True)
+        self.log('valid_rel_abs_err',err,batch_size=batch_size,sync_dist=True)
         
     def predict_step(self, batch, batch_idx=None):
         return self.step(batch, predict_step=True)
