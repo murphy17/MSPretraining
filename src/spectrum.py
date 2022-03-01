@@ -59,6 +59,7 @@ def compute_peptide_mz(sequence, ion, charge, loss):
     return mz
 
 def transform_spectrum(item):
+    index = item['index']
     sequence = item['Spectrum']['sequence'][0]
     precursor_charge = item['Spectrum']['charge'][0]
     precursor_length = len(sequence)
@@ -90,6 +91,7 @@ def transform_spectrum(item):
     )
     
     item = {}
+    item['index'] = index
     item['x'] = codes
     item['y'] = fragments
     item['x_mask'] = np.ones_like(codes, dtype=np.int32)

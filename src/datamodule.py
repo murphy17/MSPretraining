@@ -75,6 +75,7 @@ class MSDataModule(LightningDataModule):
             shuffle=True
         )
 
+        # this is completely inefficient, needs revisiting
         self.val_dataset = RejectionSampler(
             dataset=self.dataset,
             indicator=lambda item: self.filter(item) and (item['sequence'] in self.val_sequences),

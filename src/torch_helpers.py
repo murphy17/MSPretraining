@@ -20,6 +20,7 @@ class PandasHDFDataset(Dataset):
         
     def __getitem__(self, idx):
         item = {}
+        item['index'] = idx
         for key in self.hdf.keys():
             value = self.hdf.select(key=key, where=f'index=={idx}')
             value = value.to_dict(orient='list')

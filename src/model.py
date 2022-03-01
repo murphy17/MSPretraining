@@ -52,16 +52,29 @@ class MSTransformer(pl.LightningModule):
         self.losses = losses
         
         self.model_dim = model_dim
-        self.output_dim = (len(self.ions), len(self.fragment_charges), len(self.losses))
+        self.output_dim = (
+            len(self.ions), 
+            len(self.fragment_charges),
+            len(self.losses)
+        )
         self.max_length = max_length
         self.model_depth = model_depth
         self.num_heads = num_heads
         self.dropout = dropout
         self.lr = lr
         
-        self.residue_embedding = nn.Embedding(len(self.residues), model_dim)
-        self.charge_embedding = nn.Embedding(len(self.parent_charges), model_dim)
-        self.ce_embedding = nn.Linear(1, model_dim)
+        self.residue_embedding = nn.Embedding(
+            len(self.residues), 
+            model_dim,
+            padding_idx=0
+        )
+        self.charge_embedding = nn.Embedding(
+            len(self.parent_charges), 
+            model_dim
+        )
+        self.ce_embedding = nn.Sequential(
+            nn.Linear(1, model_dim, bias=False)
+        )
 
         self.positional_encoding = PositionalEncoding(
             d_model=model_dim,
@@ -79,7 +92,42 @@ class MSTransformer(pl.LightningModule):
             batch_first=True
         )
         
+#         self.lstm_encoder = nn.LSTM(
+#             input_size=model_dim,
+#             hidden_size=model_dim,
+#             proj_size=model_dim//2,
+#             num_layers=model_depth,
+#             dropout=dropout,
+#             batch_first=True,
+#             bidirectional=True
+#         )
+#         self.lstm_decoder = nn.LSTM(
+#             input_size=model_dim,
+#             hidden_size=model_dim,
+#             proj_size=model_dim//2,
+#             num_layers=model_depth,
+#             dropout=dropout,
+#             batch_first=True,
+#             bidirectional=True
+#         )
+        
         self.classifier = nn.Linear(model_dim, np.prod(self.output_dim))
+        
+    def _encode_src(self, sequence):
+        x = self.residue_embedding(sequence)
+        x = self.positional_encoding(x, offset=0, stride=2)
+        return x
+    
+    def _encode_tgt(self, charge, ce, max_bonds):
+        charge = charge - min(self.parent_charges)
+        charge = charge.view(-1,1).expand(-1,max_bonds)
+        ce = ce.view(-1,1).expand(-1,max_bonds)
+        x = (
+            self.charge_embedding(charge) +
+            self.ce_embedding(ce.unsqueeze(-1))
+        )
+        x = self.positional_encoding(x, offset=1, stride=2)
+        return x
         
     def forward(
         self, 
@@ -101,29 +149,25 @@ class MSTransformer(pl.LightningModule):
             fragment_mask = torch.ones(batch_size, max_bonds, device=self.device)
         x_tgt_mask = fragment_mask
         
-        x_src = self.residue_embedding(sequence)
-        x_src = self.positional_encoding(x_src, offset=0, stride=2)
+        x_src = self._encode_src(sequence)
         x_src *= x_src_mask.unsqueeze(-1) # unsure
         
-        charge = charge - min(self.parent_charges)
-        charge = charge.view(-1,1).expand(-1,max_bonds)
-        ce = ce.view(-1,1).expand(-1,max_bonds)
-        x_tgt = (
-            self.charge_embedding(charge) +
-            self.ce_embedding(ce.unsqueeze(-1))
-        )
-        x_tgt = self.positional_encoding(x_tgt, offset=1, stride=2)
+        x_tgt = self._encode_tgt(charge, ce, max_bonds)
         x_tgt *= x_tgt_mask.unsqueeze(-1) # unsure
         
-        y_pred = self.transformer(
-            src=x_src,
-            tgt=x_tgt,
-            src_key_padding_mask=x_src_mask != 1,
-            memory_key_padding_mask=x_src_mask != 1,
-            tgt_key_padding_mask=x_tgt_mask != 1
+        z = self.transformer(
+            src = x_src,
+            tgt = x_tgt,
+            src_key_padding_mask = ~x_src_mask,
+            memory_key_padding_mask = ~x_src_mask,
+            tgt_key_padding_mask = ~x_tgt_mask
         )
+        y_pred = self.classifier(z)
         
-        y_pred = self.classifier(y_pred)
+#         z, _ = self.lstm_encoder(x_src * x_src_mask.unsqueeze(-1))
+#         z = z[:,:max_bonds] + x_tgt
+#         z, _ = self.lstm_decoder(z * x_tgt_mask.unsqueeze(-1))
+#         y_pred = self.classifier(z)
         
         if not with_logits:
             y_pred = y_pred.flatten(1)
@@ -134,7 +178,7 @@ class MSTransformer(pl.LightningModule):
         
         return y_pred
 
-    def masked_loss(self, loss_fn, input, target, mask):
+    def _masked_loss(self, loss_fn, input, target, mask):
         batch_size = input.shape[0]
         loss = 0
         for input_i, target_i, mask_i in zip(input, target, mask):
@@ -153,20 +197,26 @@ class MSTransformer(pl.LightningModule):
             charge=batch['charge'].long(),
             ce=batch['collision_energy'].float(),
             sequence_mask=batch['x_mask'].bool(),
-            fragment_mask=batch['x_mask'][:,1:].bool()
+            fragment_mask=batch['x_mask'].bool()[:,1:],
+            with_logits=not predict_step
         )
         
         y_total = y.flatten(1).sum(1).view(batch_size,1,1,1,1)
         
         if predict_step:
             # renormalize to area of observed fragments
-            y_pred /= (y_pred * (y > 0)).flatten(1).sum(1).view(-1,1,1,1,1)
+            y_pred /= (y_pred * (y > 0)).flatten(1).sum(1).view(batch_size,1,1,1,1)
             y_pred *= y_total
             return y_pred
 
-        loss = self.masked_loss(F.cross_entropy, y_pred, y / y_total, y_mask)
+        loss = self._masked_loss(
+            F.cross_entropy, 
+            y_pred, 
+            y / y_total,
+            y_mask
+        )
         
-        err = self.masked_loss(
+        err = self._masked_loss(
             lambda a, b: ((torch.softmax(a,dim=1) * b.sum() - b) / (b+1)).abs().mean(), 
             y_pred.view(batch_size,-1),
             y.view(batch_size,-1), 
@@ -181,10 +231,10 @@ class MSTransformer(pl.LightningModule):
         self.log('train_rel_abs_err',err)
         return loss
     
-    def validation_step(self, batch, batch_idx):
-        loss, err = self.step(batch)
-        self.log('valid_cross_entropy',loss)
-        self.log('valid_rel_abs_err',err)
+#     def validation_step(self, batch, batch_idx):
+#         loss, err = self.step(batch)
+#         self.log('valid_cross_entropy',loss)
+#         self.log('valid_rel_abs_err',err)
         
     def predict_step(self, batch, batch_idx=None):
         return self.step(batch, predict_step=True)
