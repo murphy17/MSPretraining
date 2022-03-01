@@ -20,7 +20,7 @@ class MSDataModule(LightningDataModule):
         train_val_split,
         cdhit_threshold,
         cdhit_word_length,
-        filter=None,
+#         filter=None,
         num_workers=1,
         cache_dir=None,
         random_state=0
@@ -34,7 +34,7 @@ class MSDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.cache_dir = cache_dir
         self.random_state = 0
-        self.filter = lambda item: True if filter is None else filter
+#         self.filter = lambda item: True if filter is None else filter
 
     def setup(self, stage=None):
         if self.cache_dir:
@@ -69,18 +69,24 @@ class MSDataModule(LightningDataModule):
         self.train_sequences = [s for s, c in zip(self.sequences, clusters) if c in train_clusters]
         self.val_sequences = [s for s, c in zip(self.sequences, clusters) if c in val_clusters]
         
-        self.train_dataset = RejectionSampler(
-            dataset=self.dataset,
-            indicator=lambda item: self.filter(item) and (item['sequence'] in self.train_sequences),
-            shuffle=True
-        )
+        train_idxs = [i for i, (s,c) in enumerate(zip(self.sequences, clusters)) if c in train_clusters]
+        val_idxs = [i for i, (s,c) in enumerate(zip(self.sequences, clusters)) if c in val_clusters]
+        
+        self.train_dataset = Subset(self.dataset, train_idxs)
+        self.val_dataset = Subset(self.dataset, val_idxs)
+        
+#         self.train_dataset = RejectionSampler(
+#             dataset=self.dataset,
+#             indicator=lambda item: self.filter(item) and (item['sequence'] in self.train_sequences),
+#             shuffle=True
+#         )
 
-        # this is completely inefficient, needs revisiting
-        self.val_dataset = RejectionSampler(
-            dataset=self.dataset,
-            indicator=lambda item: self.filter(item) and (item['sequence'] in self.val_sequences),
-            shuffle=False
-        )
+#         # this is completely inefficient, needs revisiting
+#         self.val_dataset = RejectionSampler(
+#             dataset=self.dataset,
+#             indicator=lambda item: self.filter(item) and (item['sequence'] in self.val_sequences),
+#             shuffle=False
+#         )
 
     def train_dataloader(self):
         dataloader = DataLoader(
@@ -88,6 +94,7 @@ class MSDataModule(LightningDataModule):
             batch_size=self.batch_size,
             collate_fn=zero_padding_collate,
             num_workers=self.num_workers,
+            shuffle=True,
             drop_last=True
         )
         return dataloader
@@ -98,6 +105,7 @@ class MSDataModule(LightningDataModule):
             batch_size=self.batch_size,
             collate_fn=zero_padding_collate,
             num_workers=self.num_workers,
+            shuffle=False,
             drop_last=False
         )
         return dataloader
@@ -108,6 +116,7 @@ class MSDataModule(LightningDataModule):
             batch_size=1,
 #             collate_fn=zero_padding_collate,
             num_workers=1,
+            shuffle=False,
             drop_last=False
         )
         return dataloader

@@ -232,10 +232,10 @@ class MSTransformer(pl.LightningModule):
         return loss
     
 # this was hanging...
-#     def validation_step(self, batch, batch_idx):
-#         loss, err = self.step(batch)
-#         self.log('valid_cross_entropy',loss)
-#         self.log('valid_rel_abs_err',err)
+    def validation_step(self, batch, batch_idx):
+        loss, err = self.step(batch)
+        self.log('valid_cross_entropy',loss)
+        self.log('valid_rel_abs_err',err)
         
     def predict_step(self, batch, batch_idx=None):
         return self.step(batch, predict_step=True)
