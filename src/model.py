@@ -232,7 +232,6 @@ class MSTransformer(pl.LightningModule):
         self.log('train_rel_abs_err',err,batch_size=batch_size)
         return loss
     
-# this was hanging...
     def validation_step(self, batch, batch_idx):
         batch_size = batch['x'].shape[0]
         loss, err = self.step(batch)
