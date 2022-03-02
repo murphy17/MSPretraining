@@ -46,7 +46,6 @@ class MSTransformer(pl.LightningModule):
         
         self.residues = residues
         self.ions = ions
-        # have to include zero here because of the pad
         self.parent_charges = range(parent_min_charge, parent_max_charge + 1)
         self.fragment_charges = range(fragment_min_charge, fragment_max_charge + 1)
         self.losses = losses

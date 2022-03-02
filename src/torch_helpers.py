@@ -36,22 +36,23 @@ class PandasHDFDataset(Dataset):
         self.hdf.close()
         
 def zero_padding_collate(items):
-    max_shapes = {}
-    for item in items:
-        for k, v in item.items():
-            if np.isscalar(v): 
-                continue
-            elif k not in max_shapes:
-                max_shapes[k] = np.shape(v)
-            else:
-                max_shapes[k] = np.maximum(max_shapes[k],np.shape(v))
-    for item in items:
-        for k, max_shape in max_shapes.items():
-            if len(max_shape) == 0:
-                continue
-            pad = np.stack([np.zeros_like(max_shape), max_shape - np.shape(item[k])])
-            pad = pad.T.astype(int)
-            item[k] = np.pad(item[k], pad)
+    if len(items) > 1:
+        max_shapes = {}
+        for item in items:
+            for k, v in item.items():
+                if np.isscalar(v): 
+                    continue
+                elif k not in max_shapes:
+                    max_shapes[k] = np.shape(v)
+                else:
+                    max_shapes[k] = np.maximum(max_shapes[k],np.shape(v))
+        for item in items:
+            for k, max_shape in max_shapes.items():
+                if len(max_shape) == 0:
+                    continue
+                pad = np.stack([np.zeros_like(max_shape), max_shape - np.shape(item[k])])
+                pad = pad.T.astype(int)
+                item[k] = np.pad(item[k], pad)
     items = default_collate(items)
     return items
 

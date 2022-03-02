@@ -34,6 +34,7 @@ class MSDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.cache_dir = cache_dir
         self.random_state = 0
+        # disabled rejection sampling for now
 #         self.filter = lambda item: True if filter is None else filter
 
     def setup(self, stage=None):
@@ -54,6 +55,7 @@ class MSDataModule(LightningDataModule):
             columns=['sequence']
         ).iloc[:,0].tolist()
         
+        # might want to be very sure this doesn't cause any problems w/ distributed ...
         cdhit = CDHIT(
             threshold=self.cdhit_threshold,
             word_length=self.cdhit_word_length
@@ -72,21 +74,9 @@ class MSDataModule(LightningDataModule):
         train_idxs = [i for i, (s,c) in enumerate(zip(self.sequences, clusters)) if c in train_clusters]
         val_idxs = [i for i, (s,c) in enumerate(zip(self.sequences, clusters)) if c in val_clusters]
         
+        # ... this too
         self.train_dataset = Subset(self.dataset, train_idxs)
         self.val_dataset = Subset(self.dataset, val_idxs)
-        
-#         self.train_dataset = RejectionSampler(
-#             dataset=self.dataset,
-#             indicator=lambda item: self.filter(item) and (item['sequence'] in self.train_sequences),
-#             shuffle=True
-#         )
-
-#         # this is completely inefficient, needs revisiting
-#         self.val_dataset = RejectionSampler(
-#             dataset=self.dataset,
-#             indicator=lambda item: self.filter(item) and (item['sequence'] in self.val_sequences),
-#             shuffle=False
-#         )
 
     def train_dataloader(self):
         dataloader = DataLoader(
@@ -114,7 +104,7 @@ class MSDataModule(LightningDataModule):
         dataloader = DataLoader(
             self.val_dataset,
             batch_size=1,
-#             collate_fn=zero_padding_collate,
+            collate_fn=zero_padding_collate,
             num_workers=1,
             shuffle=False,
             drop_last=False
