@@ -53,9 +53,9 @@ def compute_peptide_mz(sequence, ion, charge, loss):
     mz = fast_mass(sequence.upper(), ion, charge)
     for aa in sequence:
         if aa in C.mod_masses:
-            mz += C.mod_masses[aa]
+            mz += C.mod_masses[aa] / charge
     if loss != '':
-        mz -= C.loss_masses[loss]
+        mz -= C.loss_masses[loss] / charge
     return mz
 
 def transform_spectrum(item):
