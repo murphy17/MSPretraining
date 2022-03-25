@@ -67,10 +67,12 @@ class MSTransformer(pl.LightningModule):
             model_dim,
             padding_idx=0
         )
+        
         self.charge_embedding = nn.Embedding(
             len(self.parent_charges), 
             model_dim
         )
+        
         self.ce_embedding = nn.Sequential(
             nn.Linear(1, model_dim, bias=False)
         )
@@ -90,25 +92,6 @@ class MSTransformer(pl.LightningModule):
             dropout=dropout,
             batch_first=True
         )
-        
-#         self.lstm_encoder = nn.LSTM(
-#             input_size=model_dim,
-#             hidden_size=model_dim,
-#             proj_size=model_dim//2,
-#             num_layers=model_depth,
-#             dropout=dropout,
-#             batch_first=True,
-#             bidirectional=True
-#         )
-#         self.lstm_decoder = nn.LSTM(
-#             input_size=model_dim,
-#             hidden_size=model_dim,
-#             proj_size=model_dim//2,
-#             num_layers=model_depth,
-#             dropout=dropout,
-#             batch_first=True,
-#             bidirectional=True
-#         )
         
         self.classifier = nn.Linear(model_dim, np.prod(self.output_dim))
         

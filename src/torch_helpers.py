@@ -10,6 +10,16 @@ from torch.utils.data.dataloader import default_collate
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
 import torch.distributed as dist
 
+class NamedTensorDataset(Dataset):
+    def __init__(self,**kwargs):
+        self.items = [dict(zip(kwargs.keys(),item)) for item in zip(*kwargs.values())]
+
+    def __getitem__(self, idx):
+        return self.items[idx]
+    
+    def __len__(self):
+        return len(self.items)
+        
 class PandasHDFDataset(Dataset):
     def __init__(self, hdf_path, primary_key, transform=None):
         self.hdf_path = hdf_path
