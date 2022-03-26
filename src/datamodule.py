@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 
 from .torch_helpers import RejectionSampler, zero_padding_collate, cache_path, PandasHDFDataset
 from .spectrum import transform_spectrum
-from .cdhit import CDHIT
+from .cdhit import cdhit_split
 from .constants import MSConstants
 C = MSConstants()
 
@@ -23,7 +23,8 @@ class MSDataModule(LightningDataModule):
 #         filter=None,
         num_workers=1,
         cache_dir=None,
-        random_state=0
+        random_state=0,
+        **kwargs
     ):
         super().__init__()
         self.hdf_path = hdf_path
@@ -55,26 +56,14 @@ class MSDataModule(LightningDataModule):
             columns=['sequence']
         ).iloc[:,0].tolist()
         
-        # might want to be very sure this doesn't cause any problems w/ distributed ...
-        cdhit = CDHIT(
+        train_seqs, val_seqs, train_idxs, val_idxs = cdhit_split(
+            self.sequences,
+            range(len(self.sequences)),
+            split=self.train_val_split,
             threshold=self.cdhit_threshold,
-            word_length=self.cdhit_word_length
-        )
-        clusters = cdhit.fit_predict(list(set(self.sequences)))
-        train_clusters, val_clusters = train_test_split(
-            clusters, 
-            train_size=self.train_val_split,
+            word_length=self.cdhit_word_length,
             random_state=self.random_state
         )
-        train_clusters = set(train_clusters)
-        val_clusters = set(val_clusters)
-        self.train_sequences = [s for s, c in zip(self.sequences, clusters) if c in train_clusters]
-        self.val_sequences = [s for s, c in zip(self.sequences, clusters) if c in val_clusters]
-        
-        train_idxs = [i for i, (s,c) in enumerate(zip(self.sequences, clusters)) if c in train_clusters]
-        val_idxs = [i for i, (s,c) in enumerate(zip(self.sequences, clusters)) if c in val_clusters]
-        
-        # ... this too
         self.train_dataset = Subset(self.dataset, train_idxs)
         self.val_dataset = Subset(self.dataset, val_idxs)
 
@@ -85,7 +74,8 @@ class MSDataModule(LightningDataModule):
             collate_fn=zero_padding_collate,
             num_workers=self.num_workers,
             shuffle=True,
-            drop_last=True
+            drop_last=True,
+            pin_memory=True
         )
         return dataloader
 
@@ -96,7 +86,8 @@ class MSDataModule(LightningDataModule):
             collate_fn=zero_padding_collate,
             num_workers=self.num_workers,
             shuffle=False,
-            drop_last=False
+            drop_last=False,
+            pin_memory=True
         )
         return dataloader
     

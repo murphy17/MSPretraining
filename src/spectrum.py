@@ -30,10 +30,14 @@ def tensorize_fragments(intensities, bonds, ions, charges, losses, sequence, pre
     # and impossible fragments to observed zeros
     fragment_mask = np.zeros_like(fragments,dtype=np.int32)
     fragment_mask[fragments > 0] = 1
-    fragment_mzs = fragment_mz_tensor(sequence)
-    fragment_mask[fragment_mzs < C.min_frag_mz] = 1
-    fragment_mask[fragment_mzs > C.max_frag_mz] = 1
-    fragment_mask[:,:,np.arange(C.min_frag_charge,C.max_frag_charge+1) > precursor_charge] = 1
+    is_invalid_charge = np.arange(C.min_frag_charge,C.max_frag_charge+1) > precursor_charge
+    fragment_mask[:,:,is_invalid_charge] = 1
+    
+   # I am actually not sure about these.
+    # they are physically *possible* after all
+    # fragment_mzs = fragment_mz_tensor(sequence)
+    # fragment_mask[fragment_mzs < C.min_frag_mz] = 1
+    # fragment_mask[fragment_mzs > C.max_frag_mz] = 1
     
     return fragments, fragment_mask
 

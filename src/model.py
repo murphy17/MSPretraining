@@ -4,6 +4,9 @@ from torch import nn
 from torch.nn import functional as F
 import pytorch_lightning as pl
 
+from .constants import MSConstants
+C = MSConstants()
+
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
         super().__init__()
@@ -27,28 +30,36 @@ class PositionalEncoding(nn.Module):
 class MSTransformer(pl.LightningModule):
     def __init__(
         self,
-        residues,
-        ions,
-        parent_min_charge,
-        parent_max_charge,
-        fragment_min_charge,
-        fragment_max_charge,
-        losses,
+#         residues,
+#         ions,
+#         parent_min_charge,
+#         parent_max_charge,
+#         fragment_min_charge,
+#         fragment_max_charge,
+#         losses,
         model_dim,
         model_depth,
         num_heads,
         lr,
         dropout, 
-        max_length
+        max_length,
+        use_cls_token,
+        **kwargs
     ):
         super().__init__()
         self.save_hyperparameters()
         
-        self.residues = residues
-        self.ions = ions
-        self.parent_charges = range(parent_min_charge, parent_max_charge + 1)
-        self.fragment_charges = range(fragment_min_charge, fragment_max_charge + 1)
-        self.losses = losses
+#         self.residues = residues
+#         self.ions = ions
+#         self.parent_charges = range(parent_min_charge, parent_max_charge + 1)
+#         self.fragment_charges = range(fragment_min_charge, fragment_max_charge + 1)
+#         self.losses = losses
+
+        self.residues = C.alphabet
+        self.ions = C.ions
+        self.parent_charges = range(C.min_charge, C.max_charge + 1)
+        self.fragment_charges = range(C.min_frag_charge, C.max_frag_charge + 1)
+        self.losses = C.losses
         
         self.model_dim = model_dim
         self.output_dim = (
@@ -61,9 +72,10 @@ class MSTransformer(pl.LightningModule):
         self.num_heads = num_heads
         self.dropout = dropout
         self.lr = lr
+        self.use_cls_token = use_cls_token
         
         self.residue_embedding = nn.Embedding(
-            len(self.residues), 
+            len(self.residues)+1, # CLS token 
             model_dim,
             padding_idx=0
         )
@@ -95,61 +107,70 @@ class MSTransformer(pl.LightningModule):
         
         self.classifier = nn.Linear(model_dim, np.prod(self.output_dim))
         
-    def _encode_src(self, sequence):
-        x = self.residue_embedding(sequence)
-        x = self.positional_encoding(x, offset=0, stride=2)
-        return x
+    def _encode_src(self, sequence, sequence_mask):
+        batch_size, max_residues = sequence.shape
+        # prepend CLS token
+        if self.use_cls_token:
+            cls_token = len(self.residues) * torch.ones_like(sequence[:,[0]])
+            x = torch.cat([cls_token,sequence],axis=1)
+            x_mask = torch.cat([cls_token.bool(),sequence_mask],axis=1)
+        else:
+            x = sequence
+            x_mask = sequence_mask
+        x = self.residue_embedding(x)
+        if self.use_cls_token:
+            x[:,1:] = self.positional_encoding(x[:,1:], offset=0, stride=2)
+        else:
+            x = self.positional_encoding(x, offset=0, stride=2)
+        return x, x_mask
     
-    def _encode_tgt(self, charge, ce, max_bonds):
-        charge = charge - min(self.parent_charges)
-        charge = charge.view(-1,1).expand(-1,max_bonds)
-        ce = ce.view(-1,1).expand(-1,max_bonds)
-        x = (
-            self.charge_embedding(charge) +
-            self.ce_embedding(ce.unsqueeze(-1))
-        )
+    def _encode_tgt(self, sequence, fragment_mask):
+        batch_size = sequence.shape[0]
+        max_bonds = sequence.shape[1] - 1
+        x = torch.zeros(batch_size,max_bonds,self.model_dim,device=self.device)
         x = self.positional_encoding(x, offset=1, stride=2)
-        return x
+        x_mask = fragment_mask
+        return x, x_mask
+    
+    def _encode_mem(self, z, charge, ce):
+        charge = charge - min(self.parent_charges)
+        charge = charge.view(-1,1)
+        ce = ce.view(-1,1)
+        if self.use_cls_token:
+            z = z[:,[0]]
+        z = z + self.charge_embedding(charge)
+        z = z + self.ce_embedding(ce).unsqueeze(1)
+        # dropout?
+        return z
         
     def forward(
         self, 
         sequence, 
         charge,
         ce,
-        sequence_mask=None, 
-        fragment_mask=None,
+        sequence_mask, 
+        fragment_mask,
         with_logits=False
     ):
         batch_size, max_residues = sequence.shape
         max_bonds = max_residues - 1
         
-        if sequence_mask is None:
-            sequence_mask = torch.ones(batch_size, max_residues, device=self.device)
-        x_src_mask = sequence_mask
+        x_src, x_src_mask = self._encode_src(sequence, sequence_mask)
+        x_tgt, x_tgt_mask = self._encode_tgt(sequence, fragment_mask)
         
-        if fragment_mask is None:
-            fragment_mask = torch.ones(batch_size, max_bonds, device=self.device)
-        x_tgt_mask = fragment_mask
-        
-        x_src = self._encode_src(sequence)
-        x_src *= x_src_mask.unsqueeze(-1) # unsure
-        
-        x_tgt = self._encode_tgt(charge, ce, max_bonds)
-        x_tgt *= x_tgt_mask.unsqueeze(-1) # unsure
-        
-        z = self.transformer(
-            src = x_src,
-            tgt = x_tgt,
-            src_key_padding_mask = ~x_src_mask,
-            memory_key_padding_mask = ~x_src_mask,
-            tgt_key_padding_mask = ~x_tgt_mask
+        z = self.transformer.encoder(
+            src=x_src, 
+            src_key_padding_mask=~x_src_mask
         )
-        y_pred = self.classifier(z)
+        z = self._encode_mem(z, charge, ce)
+        z = self.transformer.decoder(
+            tgt=x_tgt, 
+            memory=z,
+            tgt_key_padding_mask=~x_tgt_mask,
+            memory_key_padding_mask=None if self.use_cls_token else ~x_src_mask
+        )
         
-#         z, _ = self.lstm_encoder(x_src * x_src_mask.unsqueeze(-1))
-#         z = z[:,:max_bonds] + x_tgt
-#         z, _ = self.lstm_decoder(z * x_tgt_mask.unsqueeze(-1))
-#         y_pred = self.classifier(z)
+        y_pred = self.classifier(z)
         
         if not with_logits:
             y_pred = y_pred.flatten(1)
