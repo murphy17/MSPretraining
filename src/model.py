@@ -137,40 +137,58 @@ class MSTransformer(pl.LightningModule):
     def _encode_mem(self, z, charge, ce):
         charge = charge - min(self.parent_charges)
         charge = charge.view(-1,1)
-        ce = ce.view(-1,1)
-        if self.use_cls_token:
-            z = z[:,[0]]
         z = z + self.charge_embedding(charge)
+        ce = ce.view(-1,1)
         z = z + self.ce_embedding(ce).unsqueeze(1)
-        # dropout?
-        # z = self.dropout(z)
         return z
         
-    def forward(
-        self, 
-        sequence, 
+    def encoder(
+        self,
+        sequence,
+        sequence_mask,
+    ):
+        batch_size, max_residues = sequence.shape
+        max_bonds = max_residues - 1
+        
+        x_src, x_src_mask = self._encode_src(
+            sequence.long(), 
+            sequence_mask.bool()
+        )
+        
+        z = self.transformer.encoder(
+            src=x_src, 
+            src_key_padding_mask=~x_src_mask
+        )
+        
+        if self.use_cls_token:
+            z = z[:,[0]]
+        
+        return z
+    
+    def decoder(
+        self,
+        z,
+        sequence,
         charge,
         ce,
-        sequence_mask, 
         fragment_mask,
         with_logits=False
     ):
         batch_size, max_residues = sequence.shape
         max_bonds = max_residues - 1
         
-        x_src, x_src_mask = self._encode_src(sequence, sequence_mask)
-        x_tgt, x_tgt_mask = self._encode_tgt(sequence, fragment_mask)
-        
-        z = self.transformer.encoder(
-            src=x_src, 
-            src_key_padding_mask=~x_src_mask
+        x_tgt, x_tgt_mask = self._encode_tgt(
+            sequence.long(),
+            fragment_mask.bool()
         )
-        z = self._encode_mem(z, charge, ce)
+            
+        z = self._encode_mem(z, charge.long(), ce.float())
+        
         z = self.transformer.decoder(
             tgt=x_tgt, 
             memory=z,
-            tgt_key_padding_mask=~x_tgt_mask,
-            memory_key_padding_mask=None if self.use_cls_token else ~x_src_mask
+            tgt_key_padding_mask=~x_tgt_mask.bool(),
+            memory_key_padding_mask=None if self.use_cls_token else ~x_src_mask.bool()
         )
         
         y_pred = self.classifier(z)
@@ -183,6 +201,57 @@ class MSTransformer(pl.LightningModule):
         y_pred = y_pred.reshape(-1, max_bonds, *self.output_dim)
         
         return y_pred
+        
+    def forward(
+        self, 
+        sequence,
+        charge,
+        ce,
+        sequence_mask, 
+        fragment_mask,
+        with_logits=False
+    ):
+        z = self.encoder(
+            sequence, 
+            sequence_mask
+        )
+        y_pred = self.decoder(
+            z,
+            sequence,
+            charge,
+            ce,
+            fragment_mask,
+            with_logits
+        )
+        return y_pred
+#         batch_size, max_residues = sequence.shape
+#         max_bonds = max_residues - 1
+        
+#         x_src, x_src_mask = self._encode_src(sequence, sequence_mask)
+#         x_tgt, x_tgt_mask = self._encode_tgt(sequence, fragment_mask)
+        
+#         z = self.transformer.encoder(
+#             src=x_src, 
+#             src_key_padding_mask=~x_src_mask
+#         )
+#         z = self._encode_mem(z, charge, ce)
+#         z = self.transformer.decoder(
+#             tgt=x_tgt, 
+#             memory=z,
+#             tgt_key_padding_mask=~x_tgt_mask,
+#             memory_key_padding_mask=None if self.use_cls_token else ~x_src_mask
+#         )
+        
+#         y_pred = self.classifier(z)
+        
+#         if not with_logits:
+#             y_pred = y_pred.flatten(1)
+#             y_pred = torch.softmax(y_pred, dim=1)
+#             y_pred = y_pred.reshape(y_pred.shape)
+            
+#         y_pred = y_pred.reshape(-1, max_bonds, *self.output_dim)
+        
+#         return y_pred
 
     def _masked_loss(self, loss_fn, input, target, mask):
         batch_size = input.shape[0]
@@ -195,15 +264,15 @@ class MSTransformer(pl.LightningModule):
     def step(self, batch, predict_step=False):
         batch_size = batch['x'].shape[0]
 
-        y = batch['y'].float()
-        y_mask = batch['y_mask'].bool()
+        y = batch['y']
+        y_mask = batch['y_mask']
         
         y_pred = self(
-            sequence=batch['x'].long(),
-            charge=batch['charge'].long(),
-            ce=batch['collision_energy'].float(),
-            sequence_mask=batch['x_mask'].bool(),
-            fragment_mask=batch['x_mask'].bool()[:,1:],
+            sequence=batch['x'],
+            charge=batch['charge'],
+            ce=batch['collision_energy'],
+            sequence_mask=batch['x_mask'],
+            fragment_mask=batch['x_mask'][:,1:],
             with_logits=not predict_step
         )
         
