@@ -107,6 +107,8 @@ class MSTransformer(pl.LightningModule):
         
         self.classifier = nn.Linear(model_dim, np.prod(self.output_dim))
         
+        # self.dropout = nn.Dropout(p=dropout)
+        
     def _encode_src(self, sequence, sequence_mask):
         batch_size, max_residues = sequence.shape
         # prepend CLS token
@@ -141,6 +143,7 @@ class MSTransformer(pl.LightningModule):
         z = z + self.charge_embedding(charge)
         z = z + self.ce_embedding(ce).unsqueeze(1)
         # dropout?
+        # z = self.dropout(z)
         return z
         
     def forward(

@@ -8,10 +8,10 @@ def main(hparams):
     dm = MSDataModule(**hparams)
     model = MSTransformer(**hparams)
     trainer = Trainer(
-        gpus=hparams.num_gpus,
-        max_epochs=hparams.max_epochs,
-        precision=hparams.precision,
-        strategy=hparams.strategy
+        gpus=hparams['num_gpus'],
+        max_epochs=hparams['max_epochs'],
+        precision=hparams['precision'],
+        strategy=hparams['strategy']
     )
     trainer.fit(model, dm)
     
@@ -55,4 +55,4 @@ if __name__ == "__main__":
 
     hparams = parser.parse_args()
 
-    main(hparams)
+    main(vars(hparams))
