@@ -1,4 +1,5 @@
 import numpy as np
+import os
 
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader, Subset
@@ -20,9 +21,8 @@ class MSDataModule(LightningDataModule):
         train_val_split,
         cdhit_threshold,
         cdhit_word_length,
-#         filter=None,
+        tmp_env=None,
         num_workers=1,
-        cache_dir=None,
         random_state=0,
         **kwargs
     ):
@@ -33,20 +33,18 @@ class MSDataModule(LightningDataModule):
         self.cdhit_threshold = cdhit_threshold
         self.cdhit_word_length = cdhit_word_length
         self.num_workers = num_workers
-        self.cache_dir = cache_dir
+        self.tmp_env = tmp_env
         self.random_state = 0
         # disabled rejection sampling for now
 #         self.filter = lambda item: True if filter is None else filter
 
     def setup(self, stage=None):
-        if self.cache_dir:
-            new_path = cache_path(self.hdf_path, self.cache_dir)
-        else:
-            new_path = self.hdf_path
+        if self.tmp_env:
+            self.hdf_path = cache_path(self.hdf_path, os.environ[self.tmp_env])
 
         # hmm. first double check that this still works on cluster
         self.dataset = PandasHDFDataset(
-            new_path,
+            self.hdf_path,
             primary_key='Spectrum',
             transform=transform_spectrum
         )

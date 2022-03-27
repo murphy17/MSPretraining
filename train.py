@@ -25,7 +25,7 @@ if __name__ == "__main__":
     parser.add_argument('--train_val_split',type=float)
     parser.add_argument('--cdhit_threshold',type=float)
     parser.add_argument('--cdhit_word_length',type=int)
-    parser.add_argument('--cache_dir',type=str)
+    parser.add_argument('--tmp_env',type=str)
     parser.add_argument('--num_workers',type=int)
     parser.add_argument('--random_state',type=int)
 
