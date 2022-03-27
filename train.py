@@ -9,6 +9,7 @@ def main(hparams):
     model = MSTransformer(**hparams)
     trainer = Trainer(
         gpus=hparams['num_gpus'],
+        num_nodes=hparams['num_nodes'],
         max_epochs=hparams['max_epochs'],
         precision=hparams['precision'],
         strategy=hparams['strategy']

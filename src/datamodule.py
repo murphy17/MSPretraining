@@ -34,10 +34,8 @@ class MSDataModule(LightningDataModule):
         self.cdhit_word_length = cdhit_word_length
         self.num_workers = num_workers
         self.tmp_env = tmp_env
-        self.random_state = 0
-        # disabled rejection sampling for now
-#         self.filter = lambda item: True if filter is None else filter
-
+        self.random_state = random_state
+        
     def setup(self, stage=None):
         if self.tmp_env:
             self.hdf_path = cache_path(self.hdf_path, os.environ[self.tmp_env])
