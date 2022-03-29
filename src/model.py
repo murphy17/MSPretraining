@@ -44,6 +44,7 @@ class MSTransformer(pl.LightningModule):
         dropout, 
         max_length,
         use_cls_token,
+        condition_at='mem',
         **kwargs
     ):
         super().__init__()
@@ -73,6 +74,7 @@ class MSTransformer(pl.LightningModule):
         self.dropout = dropout
         self.lr = lr
         self.use_cls_token = use_cls_token
+        self.condition_at = condition_at
         
         self.residue_embedding = nn.Embedding(
             len(self.residues)+1, # CLS token 
@@ -134,7 +136,7 @@ class MSTransformer(pl.LightningModule):
         x_mask = fragment_mask
         return x, x_mask
     
-    def _encode_mem(self, z, charge, ce):
+    def _condition_covs(self, z, charge, ce):
         charge = charge - min(self.parent_charges)
         charge = charge.view(-1,1)
         z = z + self.charge_embedding(charge)
@@ -182,7 +184,10 @@ class MSTransformer(pl.LightningModule):
             fragment_mask.bool()
         )
             
-        z = self._encode_mem(z, charge.long(), ce.float())
+        if self.condition_at == 'mem':
+            z = self._condition_covs(z, charge.long(), ce.float())
+        elif self.condition_at == 'tgt':
+            x_tgt = self._condition_covs(x_tgt, charge.long(), ce.float())
         
         z = self.transformer.decoder(
             tgt=x_tgt, 
@@ -254,6 +259,7 @@ class MSTransformer(pl.LightningModule):
 #         return y_pred
 
     def _masked_loss(self, loss_fn, input, target, mask):
+        mask = mask.bool()
         batch_size = input.shape[0]
         loss = 0
         for input_i, target_i, mask_i in zip(input, target, mask):
