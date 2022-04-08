@@ -62,6 +62,18 @@ class MSDataModule(LightningDataModule):
         )
         self.train_dataset = Subset(self.dataset, train_idxs)
         self.val_dataset = Subset(self.dataset, val_idxs)
+        
+        # does only training on proton mobile change embeddings?
+        is_mobile = lambda item: sum([aa in 'RKH' for aa in item['sequence']]) < item['charge']
+        
+        self.train_dataset = RejectionSampler(
+            self.train_dataset,
+            indicator=is_mobile
+        )
+        self.val_dataset = RejectionSampler(
+            self.val_dataset,
+            indicator=is_mobile
+        )
 
     def train_dataloader(self):
         dataloader = DataLoader(
