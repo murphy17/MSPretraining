@@ -48,6 +48,7 @@ class CDHIT(TransformerMixin, ClusterMixin, BaseEstimator):
 def cdhit_split(
     sequences,
     *args,
+#     stratify=None,
     split=None,
     threshold=None,
     word_length=None,
@@ -62,6 +63,7 @@ def cdhit_split(
         list(set(clusters)),
         train_size=split,
         random_state=random_state,
+#         stratify=stratify,
         shuffle=True
     )
     train_clusters = set(train_clusters)
