@@ -242,8 +242,8 @@ def start_tensorboard(login_node, tmux_name='tensorboard', logging_dir=None):
     bash(f'ssh {login_node} \'tmux kill-session -t {tmux_name}; tmux new-session -s {tmux_name} -d srun --resv-ports=1 --pty bash -i -c "{script_path} {logging_dir}"\'')
 
 from tqdm import tqdm
-from pytorch_lightning.callbacks import ProgressBar
-class NoValProgressBar(ProgressBar):
+from pytorch_lightning.callbacks import TQDMProgressBar
+class NoValProgressBar(TQDMProgressBar):
     def init_validation_tqdm(self):
         bar = tqdm(disable=True)
         return bar

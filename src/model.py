@@ -7,6 +7,8 @@ import pytorch_lightning as pl
 from .constants import MSConstants
 C = MSConstants()
 
+EPSILON = 1e-8
+
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
         super().__init__()
@@ -37,6 +39,7 @@ class MSTransformer(pl.LightningModule):
         dropout, 
         max_length,
         temperature,
+        negative_sampling=False,
         **kwargs
     ):
         super().__init__()
@@ -60,6 +63,7 @@ class MSTransformer(pl.LightningModule):
         self.dropout = dropout
         self.lr = lr
         self.temperature = temperature
+        self.negative_sampling = negative_sampling
 
         self.positional_encoding = PositionalEncoding(
             d_model=model_dim,
@@ -98,7 +102,7 @@ class MSTransformer(pl.LightningModule):
         x = x.mean(1)
         return x
     
-    def simclr_loss(self, z1, z2, temperature):
+    def simclr_loss(self, z1, z2, temperature, neg_mask=None):
         with torch.cuda.amp.autocast(enabled=False):
             z1 = z1.to(torch.float32)
             z2 = z2.to(torch.float32)
@@ -110,9 +114,11 @@ class MSTransformer(pl.LightningModule):
 
             pos_loss = -torch.diag(sim12).mean()
 
+            log_neg_mask = 0 if neg_mask is None else torch.log(neg_mask)
+            
             neg_loss = 0.5 * (
-                torch.logsumexp(sim12, dim=0).mean() +
-                torch.logsumexp(sim12, dim=1).mean()
+                torch.logsumexp(sim12+log_neg_mask, dim=0).mean() +
+                torch.logsumexp(sim12+log_neg_mask, dim=1).mean()
             )
             
         return pos_loss + neg_loss
@@ -137,8 +143,19 @@ class MSTransformer(pl.LightningModule):
         h1 = self.projection_head(z1)
         h2 = self.projection_head(z2)
         
+        if self.negative_sampling:
+            n1 = batch1['x_mask'].sum(1)
+            n2 = batch2['x_mask'].sum(1)
+            neg_mask = (n1.view(-1,1) == n2.view(1,-1)).float()
+            neg_mask[range(batch_size),range(batch_size)] = 0
+            renorm = neg_mask.sum(1,keepdim=True).clip(EPSILON,float('inf')) * (batch_size-1)
+            neg_mask = neg_mask / renorm
+            neg_mask[range(batch_size),range(batch_size)] = 1
+        else:
+            neg_mask = None
+        
         # simclr loss, pairing on sequence
-        loss = self.simclr_loss(h1, h2, self.temperature)
+        loss = self.simclr_loss(h1, h2, self.temperature, neg_mask=neg_mask)
         
         return loss
     

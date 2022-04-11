@@ -131,7 +131,7 @@ class MSDataModule(LightningDataModule):
     
     def predict_dataloader(self, shuffle=False):
         dataloader = DataLoader(
-            self.val_dataset,
+            self.dataset,
             batch_size=1,
             collate_fn=zero_padding_collate,
             num_workers=1,
@@ -148,28 +148,21 @@ class PeptideDataModule(LightningDataModule):
         train_val_split,
         cdhit_threshold,
         cdhit_word_length,
-#         stratify_label=None,
         num_workers=1,
         random_state=0,
         val_batch_size=None,
     ):
         self.dataset = dataset
-#         self.stratify_label = stratify_label
         self.batch_size = batch_size
         self.val_batch_size = batch_size if val_batch_size is None else val_batch_size
         self.train_val_split = train_val_split
         self.cdhit_threshold = cdhit_threshold
         self.cdhit_word_length = cdhit_word_length
         self.num_workers = num_workers
-        self.random_state = 0
+        self.random_state = random_state
     
     def setup(self, stage=None):
         self.sequences = [item['sequence'] for item in self.dataset]
-        
-#         if self.stratify_label is not None:
-#             stratify = [item[self.stratify_label] for item in self.dataset]
-#         else:
-#             stratify = None
         
         train_seqs, val_seqs, train_idxs, val_idxs = cdhit_split(
             self.sequences,
