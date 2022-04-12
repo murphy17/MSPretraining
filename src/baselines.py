@@ -12,8 +12,8 @@ class SequenceModel(LightningModule):
         model_dim,
         model_depth,
         num_residues,
+        max_length,
         dropout,
-        balance_classes,
         output_weights,
         lr
     ):
@@ -22,9 +22,9 @@ class SequenceModel(LightningModule):
         self.model_dim = model_dim
         self.model_depth = model_depth
         self.num_residues = num_residues
+        self.max_length = max_length
         self.output_dim = output_dim
         self.dropout = dropout
-        self.balance_classes = balance_classes
         self.output_weights = output_weights
         self.lr = lr
         
@@ -55,14 +55,8 @@ class SequenceModel(LightningModule):
         metrics = defaultdict(list)
         
         for k in range(self.output_dim):
-            if self.balance_classes:
-                pos_weight = (1+(y[:,k]==0).sum()) / (1+(y[:,k]==1).sum())
-            else:
-                pos_weight = None
-            
             loss = F.binary_cross_entropy_with_logits(
-                y_pred[:,k], y[:,k].float(), 
-                pos_weight=pos_weight
+                y_pred[:,k], y[:,k].float()
             )
             losses.append(loss * self.output_weights[k])
             
@@ -106,7 +100,7 @@ class CNNModel(SequenceModel):
         kernel_size,
         **kwargs
     ):
-        super().__init__(**kwargs)
+        super().__init__(**kwargs,max_length=None)
         self.kernel_size = kernel_size
         
         encoder_layers = []
@@ -168,7 +162,56 @@ class CNNModel(SequenceModel):
 #         x = self.classifier(x)
 #         return x
     
+from .model import MSTransformer
+
+class MSModel(SequenceModel):
+    def __init__(
+        self,
+        checkpoint,
+        fixed_weights,
+        **kwargs
+    ):
+        super().__init__(
+            model_depth=None,
+            num_residues=None,
+            dropout=None,
+            **kwargs
+        )
+
+        self.transformer = MSTransformer.load_from_checkpoint(checkpoint)
+        # self.transformer = MSTransformer(**dict(self.transformer.hparams))
+        self.transformer.requires_grad_(not fixed_weights)
+
+        self.classifier = nn.Sequential(
+            nn.Linear(self.model_dim, self.model_dim),
+            nn.LeakyReLU(0.2,inplace=True),
+            nn.Linear(self.model_dim, self.output_dim)
+        )
+
+    def forward(self, x, x_mask):
+        x = self.transformer.encoder(x, x_mask)
+        x = x[:,0]
+        x = self.classifier(x)
+        return x
+
+
 from sequence_models.pretrained import load_model_and_alphabet
+from sequence_models.structure import Attention1d
+
+class ESMAttention1d(nn.Module):
+    """Outputs of the ESM model with the attention1d"""
+    def __init__(self, max_length, d_embedding, d_out):
+        super(ESMAttention1d, self).__init__()
+        self.attention1d = Attention1d(in_dim=d_embedding) # ???
+        self.linear = nn.Linear(d_embedding, d_embedding)
+        self.relu = nn.ReLU()
+        self.final = nn.Linear(d_embedding, d_out)
+    
+    def forward(self, x, input_mask):
+        x = self.attention1d(x, input_mask=input_mask.unsqueeze(-1))
+        x = self.relu(self.linear(x))
+        x = self.final(x)
+        return x
 
 class CARPModel(SequenceModel):
     def __init__(
@@ -177,36 +220,27 @@ class CARPModel(SequenceModel):
         **kwargs
     ):
         super().__init__(
-            model_dim=30,
+            model_dim=128,
             model_depth=None,
             num_residues=None,
             dropout=None,
             **kwargs
         )
 
-        self.encoder, self.collater = load_model_and_alphabet('carp_600k')
-        self.encoder.requires_grad_(not fixed_weights)
+        model, self.collater = load_model_and_alphabet('carp_600k')
 
-        self.classifier = nn.Sequential(
-            nn.Linear(self.model_dim, self.model_dim),
-            nn.LeakyReLU(0.2,inplace=True),
-            nn.BatchNorm1d(self.model_dim),
-            nn.Linear(self.model_dim, self.output_dim)
-        )
+        self.encoder = model.embedder.requires_grad_(not fixed_weights)
+        self.classifier = ESMAttention1d(self.max_length, self.model_dim, self.output_dim)
 
     def unbatch(self, batch):
         batch_size = len(batch['sequence'])
         x, = self.collater([[s] for s in batch['sequence']])
         x = x.to(self.device)
-        x_mask = batch['x_mask']
+        x_mask = batch['x_mask'].unsqueeze(-1)
         y = batch['y']
         return (x, x_mask, y), batch_size
         
     def forward(self, x, x_mask):
-        x = self.encoder(x)
-        x = x * x_mask.unsqueeze(-1)
-        x = x.sum(1) / x_mask.sum(-1).view(-1,1)
-        x = self.classifier(x)
+        x = self.encoder(x, x_mask)
+        x = self.classifier(x, x_mask)
         return x
-
-    

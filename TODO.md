@@ -16,3 +16,13 @@
 - Make sure the density->molarity calculation was correct (or just Z-score)
 
 - Proximity in sequence distance between DBAASP sequences and ProteomeTools
+
+# Notes from Apr 11 call with Kevin
+
+- use early stopping
+- The CARP model's final layer is logits, fix this
+- Signal peptides: SignalP. Just pull random N-termini as negatives, or assign it to the right type of signal
+- Use learned attention layer, 1 deep, to pool
+- Use single-layer ReLU, no norm as final classifier
+- Use the MS model as a convolutional filter, and run on one-vs-rest AAV/GB1 tasks (two-vs-rest for latter too); these are hard
+- Baselines to worry about are (1) same arch, no pretraining; (2) really simple thing, like CNN or log-reg

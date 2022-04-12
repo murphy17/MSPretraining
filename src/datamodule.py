@@ -152,6 +152,7 @@ class PeptideDataModule(LightningDataModule):
         random_state=0,
         val_batch_size=None,
     ):
+        super().__init__()
         self.dataset = dataset
         self.batch_size = batch_size
         self.val_batch_size = batch_size if val_batch_size is None else val_batch_size
@@ -160,7 +161,7 @@ class PeptideDataModule(LightningDataModule):
         self.cdhit_word_length = cdhit_word_length
         self.num_workers = num_workers
         self.random_state = random_state
-    
+        
     def setup(self, stage=None):
         self.sequences = [item['sequence'] for item in self.dataset]
         
@@ -188,9 +189,13 @@ class PeptideDataModule(LightningDataModule):
         return dataloader
 
     def val_dataloader(self):
+        if self.val_batch_size == -1:
+            batch_size = len(self.val_dataset)
+        else:
+            batch_size = self.val_batch_size
         dataloader = DataLoader(
             self.val_dataset,
-            batch_size=self.val_batch_size,
+            batch_size=batch_size,
             collate_fn=zero_padding_collate,
             num_workers=self.num_workers,
             shuffle=False,
