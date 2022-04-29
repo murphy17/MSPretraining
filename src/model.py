@@ -30,31 +30,16 @@ class PositionalEncoding(nn.Module):
 class MSTransformer(pl.LightningModule):
     def __init__(
         self,
-#         residues,
-#         ions,
-#         parent_min_charge,
-#         parent_max_charge,
-#         fragment_min_charge,
-#         fragment_max_charge,
-#         losses,
         model_dim,
         model_depth,
         num_heads,
         lr,
         dropout, 
         max_length,
-        use_cls_token,
-        condition_at='mem',
         **kwargs
     ):
         super().__init__()
         self.save_hyperparameters()
-        
-#         self.residues = residues
-#         self.ions = ions
-#         self.parent_charges = range(parent_min_charge, parent_max_charge + 1)
-#         self.fragment_charges = range(fragment_min_charge, fragment_max_charge + 1)
-#         self.losses = losses
 
         self.residues = C.alphabet
         self.ions = C.ions
@@ -73,8 +58,6 @@ class MSTransformer(pl.LightningModule):
         self.num_heads = num_heads
         self.dropout = dropout
         self.lr = lr
-        self.use_cls_token = use_cls_token
-        self.condition_at = condition_at
         
         self.residue_embedding = nn.Embedding(
             len(self.residues)+1, # CLS token 
@@ -111,154 +94,83 @@ class MSTransformer(pl.LightningModule):
         
         # self.dropout = nn.Dropout(p=dropout)
         
-    def _encode_src(self, sequence, sequence_mask):
-        batch_size, max_residues = sequence.shape
-        # prepend CLS token
-        if self.use_cls_token:
-            cls_token = len(self.residues) * torch.ones_like(sequence[:,[0]])
-            x = torch.cat([cls_token,sequence],axis=1)
-            x_mask = torch.cat([cls_token.bool(),sequence_mask],axis=1)
-        else:
-            x = sequence
-            x_mask = sequence_mask
-        x = self.residue_embedding(x)
-        if self.use_cls_token:
-            x[:,1:] = self.positional_encoding(x[:,1:], offset=0, stride=2)
-        else:
-            x = self.positional_encoding(x, offset=0, stride=2)
-        return x, x_mask
-    
-    def _encode_tgt(self, sequence, fragment_mask):
-        batch_size = sequence.shape[0]
-        max_bonds = sequence.shape[1] - 1
-        x = torch.zeros(batch_size,max_bonds,self.model_dim,device=self.device)
-        x = self.positional_encoding(x, offset=1, stride=2)
-        x_mask = fragment_mask
-        return x, x_mask
-    
-    def _condition_covs(self, z, charge, ce):
-        charge = charge - min(self.parent_charges)
-        charge = charge.view(-1,1)
-        z = z + self.charge_embedding(charge)
-        ce = ce.view(-1,1)
-        z = z + self.ce_embedding(ce).unsqueeze(1)
-        return z
-        
     def encoder(
         self,
-        sequence,
-        sequence_mask,
+        x_src,
+        x_src_mask
     ):
-        batch_size, max_residues = sequence.shape
-        max_bonds = max_residues - 1
+        x_src = self.residue_embedding(x_src)
+        x_src = self.positional_encoding(x_src, offset=0, stride=2)
         
-        x_src, x_src_mask = self._encode_src(
-            sequence.long(), 
-            sequence_mask.bool()
-        )
-        
-        z = self.transformer.encoder(
+        x_mem = self.transformer.encoder(
             src=x_src, 
             src_key_padding_mask=~x_src_mask
         )
+        x_mem_mask = x_src_mask
         
-        if self.use_cls_token:
-            z = z[:,[0]]
-        
-        return z
+        return x_mem, x_mem_mask
     
     def decoder(
         self,
-        z,
-        sequence,
+        x_mem,
+        x_mem_mask,
         charge,
         ce,
-        fragment_mask,
-        with_logits=False
+        softmax
     ):
-        batch_size, max_residues = sequence.shape
+        batch_size, max_residues, _ = x_mem.shape
         max_bonds = max_residues - 1
         
-        x_tgt, x_tgt_mask = self._encode_tgt(
-            sequence.long(),
-            fragment_mask.bool()
-        )
+        x_tgt = torch.zeros_like(x_mem[:,1:])
+        x_tgt = self.positional_encoding(x_tgt, offset=1, stride=2)
+        x_tgt_mask = x_mem_mask[:,1:]
             
-        if self.condition_at == 'mem':
-            z = self._condition_covs(z, charge.long(), ce.float())
-        elif self.condition_at == 'tgt':
-            x_tgt = self._condition_covs(x_tgt, charge.long(), ce.float())
+        charge = charge - min(self.parent_charges)
+        charge = charge.view(-1,1).long()
+        x_mem = x_mem + self.charge_embedding(charge)
         
-        z = self.transformer.decoder(
+        ce = ce.view(-1,1).float()
+        x_mem = x_mem + self.ce_embedding(ce).unsqueeze(1)
+        
+        y = self.transformer.decoder(
             tgt=x_tgt, 
-            memory=z,
+            memory=x_mem,
             tgt_key_padding_mask=~x_tgt_mask.bool(),
-            memory_key_padding_mask=None if self.use_cls_token else ~x_src_mask.bool()
+            memory_key_padding_mask=~x_mem_mask.bool()
         )
+        y = self.classifier(y)
         
-        y_pred = self.classifier(z)
-        
-        if not with_logits:
-            y_pred = y_pred.flatten(1)
-            y_pred = torch.softmax(y_pred, dim=1)
-            y_pred = y_pred.reshape(y_pred.shape)
+        if softmax:
+            y = y.flatten(1)
+            y = torch.softmax(y, dim=1)
+            y = y.reshape(y.shape)
             
-        y_pred = y_pred.reshape(-1, max_bonds, *self.output_dim)
+        y = y.reshape(-1, max_bonds, *self.output_dim)
         
-        return y_pred
+        return y
         
     def forward(
         self, 
         sequence,
+        sequence_mask,
         charge,
         ce,
-        sequence_mask, 
-        fragment_mask,
-        with_logits=False
+        softmax
     ):
-        z = self.encoder(
-            sequence, 
-            sequence_mask
+        x_mem, x_mem_mask = self.encoder(
+            x_src=sequence.long(), 
+            x_src_mask=sequence_mask.bool()
         )
-        y_pred = self.decoder(
-            z,
-            sequence,
-            charge,
-            ce,
-            fragment_mask,
-            with_logits
+        y = self.decoder(
+            x_mem=x_mem,
+            x_mem_mask=x_mem_mask,
+            charge=charge.long(),
+            ce=ce.float(),
+            softmax=softmax
         )
-        return y_pred
-#         batch_size, max_residues = sequence.shape
-#         max_bonds = max_residues - 1
-        
-#         x_src, x_src_mask = self._encode_src(sequence, sequence_mask)
-#         x_tgt, x_tgt_mask = self._encode_tgt(sequence, fragment_mask)
-        
-#         z = self.transformer.encoder(
-#             src=x_src, 
-#             src_key_padding_mask=~x_src_mask
-#         )
-#         z = self._encode_mem(z, charge, ce)
-#         z = self.transformer.decoder(
-#             tgt=x_tgt, 
-#             memory=z,
-#             tgt_key_padding_mask=~x_tgt_mask,
-#             memory_key_padding_mask=None if self.use_cls_token else ~x_src_mask
-#         )
-        
-#         y_pred = self.classifier(z)
-        
-#         if not with_logits:
-#             y_pred = y_pred.flatten(1)
-#             y_pred = torch.softmax(y_pred, dim=1)
-#             y_pred = y_pred.reshape(y_pred.shape)
-            
-#         y_pred = y_pred.reshape(-1, max_bonds, *self.output_dim)
-        
-#         return y_pred
+        return y
 
-    def _masked_loss(self, loss_fn, input, target, mask):
+    def masked_loss(self, loss_fn, input, target, mask):
         mask = mask.bool()
         batch_size = input.shape[0]
         loss = 0
@@ -267,7 +179,7 @@ class MSTransformer(pl.LightningModule):
         loss /= batch_size
         return loss
     
-    def step(self, batch, predict_step=False):
+    def step(self, batch, step):
         batch_size = batch['x'].shape[0]
 
         y = batch['y']
@@ -275,52 +187,59 @@ class MSTransformer(pl.LightningModule):
         
         y_pred = self(
             sequence=batch['x'],
+            sequence_mask=batch['x_mask'],
             charge=batch['charge'],
             ce=batch['collision_energy'],
-            sequence_mask=batch['x_mask'],
-            fragment_mask=batch['x_mask'][:,1:],
-            with_logits=not predict_step
+            softmax=step=='predict'
         )
         
         y_total = y.flatten(1).sum(1).view(batch_size,1,1,1,1)
         
-        if predict_step:
+        if step=='predict':
             # renormalize to area of observed fragments
             y_pred /= (y_pred * (y > 0)).flatten(1).sum(1).view(batch_size,1,1,1,1)
             y_pred *= y_total
             return y_pred
 
-        loss = self._masked_loss(
+        loss = self.masked_loss(
             F.cross_entropy, 
             y_pred, 
             y / y_total,
             y_mask
         )
         
-        err = self._masked_loss(
+        err = self.masked_loss(
             lambda a, b: ((torch.softmax(a,dim=1) * b.sum() - b) / (b+1)).abs().mean(), 
             y_pred.view(batch_size,-1),
             y.view(batch_size,-1), 
             y_mask.view(batch_size,-1)
         )
         
+        if step != 'predict':
+            self.log(
+                f'{step}_cross_entropy',
+                loss,
+                batch_size=batch_size,
+                sync_dist=step=='valid'
+            )
+            self.log(
+                f'{step}_rel_abs_err',
+                err,
+                batch_size=batch_size,
+                sync_dist=step=='valid'
+            )
+        
         return loss, err
     
     def training_step(self, batch, batch_idx):
-        batch_size = batch['x'].shape[0]
-        loss, err = self.step(batch)
-        self.log('train_cross_entropy',loss,batch_size=batch_size)
-        self.log('train_rel_abs_err',err,batch_size=batch_size)
+        loss, err = self.step(batch, step='train')
         return loss
     
     def validation_step(self, batch, batch_idx):
-        batch_size = batch['x'].shape[0]
-        loss, err = self.step(batch)
-        self.log('valid_cross_entropy',loss,batch_size=batch_size,sync_dist=True)
-        self.log('valid_rel_abs_err',err,batch_size=batch_size,sync_dist=True)
+        self.step(batch, step='valid')
         
     def predict_step(self, batch, batch_idx=None):
-        return self.step(batch, predict_step=True)
+        return self.step(batch, step='predict')
     
     def configure_optimizers(self):
         opt = torch.optim.Adam(self.parameters(), lr=self.lr)

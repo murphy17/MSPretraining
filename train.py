@@ -37,8 +37,8 @@ if __name__ == "__main__":
     parser.add_argument('--lr',type=float)
     parser.add_argument('--dropout',type=float)
     parser.add_argument('--max_length',type=int)
-    parser.add_argument('--temperature',type=float)
-    parser.add_argument('--negative_sampling',type=bool)
+#     parser.add_argument('--temperature',type=float)
+#     parser.add_argument('--negative_sampling',type=bool)
 
     # trainer
     parser.add_argument('--num_gpus',type=int)

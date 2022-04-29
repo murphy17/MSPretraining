@@ -58,7 +58,7 @@ class SequenceModel(LightningModule):
             loss = F.binary_cross_entropy_with_logits(
                 y_pred[:,k], y[:,k].float()
             )
-            losses.append(loss * self.output_weights[k])
+            losses.append(loss * self.output_weights[k][1])
             
             auc = auroc(y_pred[:,k], y[:,k])
             metrics['auc'].append(auc)
@@ -76,9 +76,14 @@ class SequenceModel(LightningModule):
             self.log(f'{step}_loss',loss,batch_size=batch_size)
 
             for m in metrics:
-                for k,w in enumerate(self.output_weights):
+                for i,(k,w) in enumerate(self.output_weights):
                     if w==0: continue
-                    self.log(f'{step}_{m}_{k}',metrics[m][k],batch_size=batch_size)
+                    self.log(
+                        f'{step}_{m}_{k}',
+                        metrics[m][i],
+                        batch_size=batch_size,
+#                         sync_dist=step=='val'
+                    )
             
         return loss, metrics, y_pred
     
@@ -87,7 +92,11 @@ class SequenceModel(LightningModule):
         return loss
     
     def validation_step(self, batch, batch_idx):
-        self.step(batch, batch_idx, step='valid')
+        self.step(batch, batch_idx, step='val')
+            
+    def test_step(self, batch, batch_idx):
+        _, metrics, _ = self.step(batch, batch_idx, step='test')
+        return metrics
             
     def predict_step(self, batch, batch_idx):
         _, _, y_pred = self.step(batch, batch_idx, step='predict')
@@ -133,6 +142,27 @@ class CNNModel(SequenceModel):
         x = self.classifier(x)
         return x
     
+class LinearModel(SequenceModel):
+    def __init__(
+        self,
+        **kwargs
+    ):
+        super().__init__(
+            **kwargs,
+            max_length=None,
+            model_depth=None,
+            dropout=None
+        )
+        
+        self.classifier = nn.Linear(self.model_dim, self.output_dim)
+        
+    def forward(self, x, x_mask):
+        x = self.embedding(x)
+        x = x.swapdims(1,2)
+        x = x.sum(-1) / x_mask.sum(-1).view(-1,1)
+        x = self.classifier(x)
+        return x
+    
 # doens't work
 # class RNNModel(SequenceModel):
 #     def __init__(
@@ -169,6 +199,7 @@ class MSModel(SequenceModel):
         self,
         checkpoint,
         fixed_weights,
+        naive,
         **kwargs
     ):
         super().__init__(
@@ -179,19 +210,21 @@ class MSModel(SequenceModel):
         )
 
         self.transformer = MSTransformer.load_from_checkpoint(checkpoint)
-        # self.transformer = MSTransformer(**dict(self.transformer.hparams))
+        if naive:
+            self.transformer = MSTransformer(**dict(self.transformer.hparams))
         self.transformer.requires_grad_(not fixed_weights)
 
-        self.classifier = nn.Sequential(
-            nn.Linear(self.model_dim, self.model_dim),
-            nn.LeakyReLU(0.2,inplace=True),
-            nn.Linear(self.model_dim, self.output_dim)
-        )
+#         self.classifier = nn.Sequential(
+#             nn.Linear(self.model_dim, self.model_dim),
+#             nn.LeakyReLU(0.2,inplace=True),
+#             nn.Linear(self.model_dim, self.output_dim)
+#         )
+        
+        self.classifier = ESMAttention1d(self.max_length, self.model_dim, self.output_dim)
 
     def forward(self, x, x_mask):
-        x = self.transformer.encoder(x, x_mask)
-        x = x[:,0]
-        x = self.classifier(x)
+        x, _ = self.transformer.encoder(x, x_mask)
+        x = self.classifier(x, x_mask)
         return x
 
 

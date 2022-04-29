@@ -60,56 +60,15 @@ class MSDataModule(LightningDataModule):
             word_length=self.cdhit_word_length,
             random_state=self.random_state
         )
-        
-        ### setup for contrastive learning on sequences
-        
-        df = self.dataset.hdf.get('Spectrum')
 
-        # drop any sequence with more than one modform ...? easiest for now
-        fields = ['sequence','charge','collision_energy']
-        mod_forms = df.groupby(fields).size().rename('mod_forms')
-
-        df = df.join(
-            mod_forms[mod_forms==1],
-            on=fields,
-            how='inner'
-        )
-
-        # need at least two views for contrastive learning
-        views = df.groupby('sequence').size().rename('views')
-
-        df = df.join(
-            views[views>1],
-            on='sequence',
-            how='inner'
-        )
-
-        groups = ( 
-            df
-            .reset_index()
-            .groupby('sequence')['index']
-            .agg(list).to_dict()
-        )
-        
-        train_groups = [groups[s] for s in set(train_seqs) if s in groups]
-        val_groups = [groups[s] for s in set(val_seqs) if s in groups]
-        
-        self.train_dataset = RandomGroupSampler(
-            dataset=Group(self.dataset, train_groups),
-            size=2,
-            replace=False
-        )
-        self.val_dataset = RandomGroupSampler(
-            dataset=Group(self.dataset, val_groups),
-            size=2,
-            replace=False
-        )
+        self.train_dataset = Subset(self.dataset, train_idxs)
+        self.val_dataset = Subset(self.dataset, val_idxs)
 
     def train_dataloader(self):
         dataloader = DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
-            collate_fn=group_collate(zero_padding_collate),
+            collate_fn=zero_padding_collate,
             num_workers=self.num_workers,
             shuffle=True,
             drop_last=True,
@@ -121,7 +80,7 @@ class MSDataModule(LightningDataModule):
         dataloader = DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
-            collate_fn=group_collate(zero_padding_collate),
+            collate_fn=zero_padding_collate,
             num_workers=self.num_workers,
             shuffle=False,
             drop_last=False,
