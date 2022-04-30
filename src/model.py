@@ -134,18 +134,37 @@ class MSTransformer(pl.LightningModule):
             x = torch.softmax(x.flatten(1), dim=1).reshape(x.shape)
         return x
 
-    def masked_loss(self, loss_fn, input, target, mask, reduce='mean'):
-        mask = mask.bool()
-        batch_size = input.shape[0]
-        loss = []
-        for input_i, target_i, mask_i in zip(input, target, mask):
-            loss.append(loss_fn(input_i[mask_i].view(1,-1), target_i[mask_i].view(1,-1)))
-        loss = torch.stack(loss)
-        if reduce == 'mean':
-            loss = torch.mean(loss)
-        elif reduce == 'median':
-            loss = torch.median(loss)
-        return loss
+#     def masked_loss(self, loss_fn, input, target, mask, reduce='mean'):
+#         mask = mask.bool()
+#         batch_size = input.shape[0]
+#         loss = []
+#         for input_i, target_i, mask_i in zip(input, target, mask):
+#             loss.append(loss_fn(input_i[mask_i].view(1,-1), target_i[mask_i].view(1,-1)))
+#         loss = torch.stack(loss)
+#         if reduce == 'mean':
+#             loss = torch.mean(loss)
+#         elif reduce == 'median':
+#             loss = torch.median(loss)
+#         return loss
+    
+    def cross_entropy(self, logits, target, mask):
+        batch_size = logits.shape[0]
+        target = target.flatten(1)
+        logits = logits.flatten(1)
+        mask = mask.flatten(1)
+        xent = -((target * F.log_softmax(logits,1)) * mask).sum(1).mean()
+        return xent
+    
+    def r_squared(self, y_pred, y, mask):
+        batch_size = y.shape[0]
+        y_pred = y_pred.flatten(1)
+        y = y.flatten(1)
+        mask = mask.flatten(1)
+        y_mean = (y * mask).sum(1) / mask.sum(1)
+        ss_res = ((y - y_pred).square() * mask).sum(1)
+        ss_tot = ((y - y_mean.unsqueeze(1)).square() * mask).sum(1)
+        r2 = (1 - ss_res / ss_tot).mean()
+        return r2
     
     def step(self, batch, step):
         batch_size = batch['x'].shape[0]
@@ -163,28 +182,31 @@ class MSTransformer(pl.LightningModule):
         # y_mask = batch['y_mask']
         y_mask = x_mask[:,1:].view(batch_size,max_length-1,1,1,1).expand_as(batch['y_mask'])
         
-        y_pred = self(
-            x=x,
-            x_mask=x_mask,
-            c=c,
-            softmax=step=='predict'
-        )
+        y_pred = self(x, x_mask, c, softmax=step=='predict')
         y_pred = y_pred.reshape(*y_pred.shape[:-1],*self.output_dim)
         
         y_total = y.flatten(1).sum(1).view(batch_size,1,1,1,1)
         
-        if step=='predict':
-            # renormalize to area of observed fragments
-            y_pred /= (y_pred * (y > 0)).flatten(1).sum(1).view(batch_size,1,1,1,1)
-            y_pred *= y_total
-            return y_pred
+        loss = self.cross_entropy(y_pred, y / y_total, y_mask)
+        
+        y_pred[y_mask==0] = -float('inf')
+        y_pred = torch.softmax(y_pred.flatten(1),1).reshape(y_pred.shape)
+        y_pred *= y_total
+        
+        rsqr = self.r_squared(y_pred, y, y_mask)
+        
+#         if step=='predict':
+#             # renormalize to area of observed fragments
+#             y_pred /= (y_pred * (y > 0)).flatten(1).sum(1).view(batch_size,1,1,1,1)
+#             y_pred *= y_total
+#             return y_pred
 
-        loss = self.masked_loss(
-            F.cross_entropy, 
-            input=y_pred, 
-            target=y / y_total,
-            mask=y_mask
-        )
+#         loss = self.masked_loss(
+#             F.cross_entropy, 
+#             input=y_pred, 
+#             target=y / y_total,
+#             mask=y_mask
+#         )
         
 #         err = self.masked_loss(
 #             lambda a, b: ((torch.softmax(a,dim=1) * b.sum() - b) / (b+1)).abs().mean(), 
@@ -193,35 +215,30 @@ class MSTransformer(pl.LightningModule):
 #             mask=y_mask
 #         )
         
-        rsqr = self.masked_loss(
-            lambda a, b: 1-(torch.softmax(a,dim=1) * b.sum() - b).square().sum()/(b-b.mean()).square().sum(), 
-            input=y_pred,
-            target=y, 
-            mask=y_mask,
-            reduce='median'
-        )
+#         rsqr = self.masked_loss(
+#             lambda a, b: 1-(torch.softmax(a,dim=1) * b.sum() - b).square().sum()/(b-b.mean()).square().sum(), 
+#             input=y_pred,
+#             target=y, 
+#             mask=y_mask,
+#             reduce='median'
+#         )
         
-        if step != 'predict':
+        if step == 'predict':
+            return y_pred
+        else:
             self.log(
                 f'{step}_cross_entropy',
                 loss,
                 batch_size=batch_size,
                 sync_dist=step=='val'
             )
-#             self.log(
-#                 f'{step}_rel_abs_err',
-#                 err,
-#                 batch_size=batch_size,
-#                 sync_dist=step=='val'
-#             )
             self.log(
                 f'{step}_r_squared',
                 rsqr,
                 batch_size=batch_size,
                 sync_dist=step=='val'
             )
-        
-        return loss
+            return loss
     
     def training_step(self, batch, batch_idx):
         return self.step(batch, step='train')

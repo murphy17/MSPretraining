@@ -4,6 +4,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from src.datamodule import MSDataModule
 from src.model import MSTransformer
+# from pytorch_lightning.plugins.training_type.ddp import DDPPlugin
 
 def main(hparams):
     dm = MSDataModule(**hparams)
@@ -14,6 +15,7 @@ def main(hparams):
         max_epochs=hparams['max_epochs'],
         precision=hparams['precision'],
         strategy=hparams['strategy'],
+#         strategy=DDPPlugin(find_unused_parameters=False),
         callbacks=[
             EarlyStopping(
                 monitor=hparams['es_monitor'],

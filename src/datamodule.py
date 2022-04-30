@@ -96,7 +96,7 @@ class MSDataModule(LightningDataModule):
             num_workers=self.num_workers,
             shuffle=True,
             drop_last=True,
-            #pin_memory=True,
+            pin_memory=True,
             persistent_workers=True
         )
         return dataloader
@@ -109,7 +109,7 @@ class MSDataModule(LightningDataModule):
             num_workers=self.num_workers,
             shuffle=False,
             drop_last=False,
-            #pin_memory=True,
+            pin_memory=True,
             persistent_workers=True
         )
         return dataloader
