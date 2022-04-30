@@ -11,10 +11,10 @@ def main(hparams):
     model = MSTransformer(**hparams)
     trainer = Trainer(
         gpus=hparams['num_gpus'],
-        num_nodes=hparams['num_nodes'],
+#         num_nodes=hparams['num_nodes'],
         max_epochs=hparams['max_epochs'],
         precision=hparams['precision'],
-        strategy=hparams['strategy'],
+#         strategy=hparams['strategy'],
 #         strategy=DDPPlugin(find_unused_parameters=False),
         callbacks=[
             EarlyStopping(

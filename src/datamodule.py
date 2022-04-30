@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, Subset
 from pyteomics.mass import fast_mass
 from sklearn.model_selection import train_test_split
 
-from .torch_helpers import RejectionSampler, zero_padding_collate, group_collate, cache_path, PandasHDFDataset, Group, RandomGroupSampler
+from .torch_helpers import RejectionSampler, zero_padding_collate, cache_path, PandasHDFDataset, MemoryCache
 from .spectrum import transform_spectrum
 from .cdhit import cdhit_split
 from .constants import MSConstants
@@ -26,6 +26,7 @@ class MSDataModule(LightningDataModule):
         tmp_env=None,
         num_workers=1,
         random_state=0,
+        cache=True,
         **kwargs
     ):
         super().__init__()
@@ -40,14 +41,18 @@ class MSDataModule(LightningDataModule):
         self.tmp_env = tmp_env
         self.random_state = random_state
         self.rng = npr.RandomState(random_state)
+        self.cache = cache
         
     def setup(self, stage=None):
         if self.tmp_env:
             self.hdf_path = cache_path(self.hdf_path, os.environ[self.tmp_env])
 
+        # kludge to pull out sequences for splitting, while doing lazy load later
+        # --- BEGIN KLUDGE ---
         self.dataset = PandasHDFDataset(
             self.hdf_path,
-            primary_table='Spectrum'
+            primary_table='Spectrum',
+            transform=transform_spectrum,
         )
         
         seqs = self.dataset.hdf.select(
@@ -70,9 +75,12 @@ class MSDataModule(LightningDataModule):
             word_length=self.cdhit_word_length,
             random_state=self.random_state
         )
+        # --- END KLUDGE ---
 
-        # "avoid forking and then loading"
-        # ... give each worker its own handle?
+        # I'm not exactly sure if this is doing anything
+        # it delays opening the HDF until an element is requested
+        # so (I think???) each worker gets its own descriptor
+        # per hdf5py: "avoid forking and then loading"
         self.dataset = PandasHDFDataset(
             self.hdf_path,
             primary_table='Spectrum',
@@ -87,6 +95,10 @@ class MSDataModule(LightningDataModule):
         self.train_dataset = Subset(self.dataset, train_idxs)
         self.val_dataset = Subset(self.dataset, val_idxs)
         self.test_dataset = Subset(self.dataset, test_idxs)
+        
+        if self.cache: # crucial to persist workers for this to be useful?
+            self.train_dataset = MemoryCache(self.train_dataset)
+            self.val_dataset = MemoryCache(self.val_dataset)
 
     def train_dataloader(self):
         dataloader = DataLoader(
@@ -97,7 +109,8 @@ class MSDataModule(LightningDataModule):
             shuffle=True,
             drop_last=True,
             pin_memory=True,
-            persistent_workers=True
+            persistent_workers=True,
+            prefetch_factor=2
         )
         return dataloader
 
@@ -110,7 +123,8 @@ class MSDataModule(LightningDataModule):
             shuffle=False,
             drop_last=False,
             pin_memory=True,
-            persistent_workers=True
+            persistent_workers=True,
+            prefetch_factor=2
         )
         return dataloader
     

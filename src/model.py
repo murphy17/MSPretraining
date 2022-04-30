@@ -195,34 +195,6 @@ class MSTransformer(pl.LightningModule):
         
         rsqr = self.r_squared(y_pred, y, y_mask)
         
-#         if step=='predict':
-#             # renormalize to area of observed fragments
-#             y_pred /= (y_pred * (y > 0)).flatten(1).sum(1).view(batch_size,1,1,1,1)
-#             y_pred *= y_total
-#             return y_pred
-
-#         loss = self.masked_loss(
-#             F.cross_entropy, 
-#             input=y_pred, 
-#             target=y / y_total,
-#             mask=y_mask
-#         )
-        
-#         err = self.masked_loss(
-#             lambda a, b: ((torch.softmax(a,dim=1) * b.sum() - b) / (b+1)).abs().mean(), 
-#             input=y_pred,
-#             target=y, 
-#             mask=y_mask
-#         )
-        
-#         rsqr = self.masked_loss(
-#             lambda a, b: 1-(torch.softmax(a,dim=1) * b.sum() - b).square().sum()/(b-b.mean()).square().sum(), 
-#             input=y_pred,
-#             target=y, 
-#             mask=y_mask,
-#             reduce='median'
-#         )
-        
         if step == 'predict':
             return y_pred
         else:

@@ -4,6 +4,9 @@ from copy import deepcopy
 import os
 import pandas as pd
 from collections import defaultdict
+import pickle
+# import zlib
+import lz4.frame as lz4
 
 bash = lambda s: os.popen(s).read().rstrip().split('\n')
 
@@ -67,6 +70,30 @@ class Group(Dataset):
     
     def __len__(self):
         return len(self.groups)
+
+class MemoryCache(Dataset):
+    def __init__(self, dataset, transform=None, compress=False):
+        self.dataset = dataset
+        self.transform = transform
+        self.compress = compress
+        self.cache = [None] * len(dataset)
+    
+    def __getitem__(self, idx):
+        if self.cache[idx] is None:
+            item = self.dataset[idx]
+            if self.compress:
+                self.cache[idx] = lz4.compress(pickle.dumps(item))
+            else:
+                self.cache[idx] = item
+        item = self.cache[idx]
+        if self.compress:
+            item = pickle.loads(lz4.decompress(compressed))
+        if self.transform is not None:
+            item = self.transform(item)
+        return item
+    
+    def __len__(self):
+        return len(self.dataset)
     
 class RandomGroupSampler(Dataset):
     def __init__(
@@ -146,7 +173,6 @@ class PandasHDFDataset(Dataset):
         
     def __getitem__(self, idx):
         if self.lazy and self.hdf is None:
-            # print(os.getpid())
             self.hdf = pd.HDFStore(self.hdf_path, mode='r')
         item = {}
         item['index'] = idx
