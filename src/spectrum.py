@@ -5,7 +5,7 @@ from .constants import MSConstants
 C = MSConstants()
 
 def index_fragment_bonds(ions, lengths, precursor_length):
-    bonds = [length-1 if ion in C.n_term_ions else precursor_length-length-1 for ion, length in zip(ions, lengths)]
+    bonds = np.array([length-1 if ion in C.n_term_ions else precursor_length-length-1 for ion, length in zip(ions, lengths)])
     return bonds
 
 def modify_sequence(sequence, mod_pos, mod_name):
@@ -19,13 +19,20 @@ def encode_sequence(sequence):
     return codes
 
 def tensorize_fragments(intensities, bonds, ions, charges, losses, sequence, precursor_charge):
-    fragments = np.zeros((len(sequence)-1,len(C.ions),C.max_frag_charge+1-C.min_frag_charge,len(C.losses)), dtype=np.float32)
-    for intensity, bond, ion, charge, loss in zip(intensities, bonds, ions, charges, losses):
-        ion = C.ions.index(ion)
-        charge = charge - 1
-        loss = C.losses.index(loss)
-        fragments[bond, ion, charge, loss] = intensity
-        
+    shape = (
+        len(sequence)-1,
+        len(C.ions),
+        C.max_frag_charge+1-C.min_frag_charge,
+        len(C.losses)
+    )
+    fragments = np.zeros(shape, dtype=np.float32)
+    
+    ions = np.array([C.ions.index(ion) for ion in ions])
+    charges = np.array(charges) - 1
+    losses = np.array([C.losses.index(loss) for loss in losses])
+    
+    fragments[bonds, ions, charges, losses] = intensities
+    
     # treat unsequenced fragments as missing, not zeros
     # and impossible fragments to observed zeros
     fragment_mask = np.zeros_like(fragments,dtype=np.int32)
@@ -94,14 +101,15 @@ def transform_spectrum(item):
         precursor_charge
     )
     
-    item = {}
-    item['index'] = index
-    item['x'] = codes
-    item['y'] = fragments
-    item['x_mask'] = np.ones_like(codes, dtype=np.int32)
-    item['y_mask'] = fragment_mask
-    item['charge'] = precursor_charge
-    item['collision_energy'] = collision_energy
-    item['sequence'] = modded_sequence
+    item = dict(
+        index=index,
+        x=codes,
+        y=fragments,
+        x_mask=np.ones_like(codes, dtype=np.int32),
+        y_mask=fragment_mask,
+        charge=precursor_charge,
+        collision_energy=collision_energy,
+        sequence=modded_sequence
+    )
     
     return item

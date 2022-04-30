@@ -3,6 +3,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 import pytorch_lightning as pl
+from sequence_models.convolutional import ByteNetLM, MaskedConv1d
 
 from .constants import MSConstants
 C = MSConstants()
@@ -26,16 +27,52 @@ class PositionalEncoding(nn.Module):
         """
         x = x + self.pe[offset:offset+x.size(1)*stride:stride].unsqueeze(0)
         return self.dropout(x)
-
+    
+class MSDecoder(nn.Module):
+    def __init__(
+        self,
+        input_dim,
+        model_dim,
+        output_dim
+    ):
+        super().__init__()
+        self.input_dim = input_dim
+        self.model_dim = model_dim
+        self.output_dim = output_dim
+        self.conv1 = MaskedConv1d(
+            in_channels=input_dim,
+            out_channels=model_dim,
+            kernel_size=2 # residues -> bonds
+        )
+        self.conv1.padding = 0 # residues -> bonds
+        self.relu1 = nn.ReLU()
+        self.conv2 = MaskedConv1d(
+            in_channels=model_dim,
+            out_channels=model_dim,
+            kernel_size=1
+        )
+        self.relu2 = nn.ReLU()
+        self.conv3 = MaskedConv1d(
+            in_channels=model_dim,
+            out_channels=output_dim,
+            kernel_size=1
+        )
+    
+    def forward(self, x, input_mask):
+        x = self.conv1(x, input_mask)
+        x = self.relu1(x)
+        x = self.conv2(x, input_mask[:,1:])
+        x = self.relu2(x)
+        x = self.conv3(x, input_mask[:,1:])
+        return x
+    
 class MSTransformer(pl.LightningModule):
     def __init__(
         self,
         model_dim,
         model_depth,
-        num_heads,
         lr,
         dropout, 
-        max_length,
         **kwargs
     ):
         super().__init__()
@@ -47,151 +84,92 @@ class MSTransformer(pl.LightningModule):
         self.fragment_charges = range(C.min_frag_charge, C.max_frag_charge + 1)
         self.losses = C.losses
         
+        self.input_dim = len(self.residues)
+        self.condition_dim = 2
         self.model_dim = model_dim
         self.output_dim = (
             len(self.ions), 
             len(self.fragment_charges),
             len(self.losses)
         )
-        self.max_length = max_length
         self.model_depth = model_depth
-        self.num_heads = num_heads
         self.dropout = dropout
         self.lr = lr
-        
-        self.residue_embedding = nn.Embedding(
-            len(self.residues)+1, # CLS token 
-            model_dim,
-            padding_idx=0
-        )
-        
-        self.charge_embedding = nn.Embedding(
-            len(self.parent_charges), 
-            model_dim
-        )
-        
-        self.ce_embedding = nn.Sequential(
-            nn.Linear(1, model_dim, bias=False)
-        )
 
-        self.positional_encoding = PositionalEncoding(
-            d_model=model_dim,
-            max_len=2*max_length, # striding
-            dropout=dropout
-        ).requires_grad_(False)
+        self.encoder = ByteNetLM(
+            n_tokens=self.input_dim,
+            d_embedding=8,
+            d_model=self.model_dim,
+            n_layers=self.model_depth,
+            kernel_size=5,
+            r=self.model_dim,
+            padding_idx=0, 
+            causal=False,
+            dropout=self.dropout,
+            activation='gelu'
+        )
+        self.encoder.decoder = nn.Identity()
+        # alternative would be one of these per charge x energy
+        self.decoder = MSDecoder(
+            input_dim=self.model_dim+self.condition_dim,
+            model_dim=self.model_dim,
+            output_dim=np.prod(self.output_dim)
+        )
+#         self.decoder = ByteNetLM(
+#             n_tokens=np.prod(self.output_dim),
+#             d_embedding=self.model_dim+self.condition_dim, 
+#             **self.bytenet_params
+#         )
+#         self.decoder.embedder.embedder = nn.Identity()
 
-        self.transformer = nn.Transformer(
-            d_model=model_dim,
-            nhead=num_heads, 
-            num_encoder_layers=model_depth, 
-            num_decoder_layers=model_depth,
-            dim_feedforward=model_dim,
-            dropout=dropout,
-            batch_first=True
-        )
-        
-        self.classifier = nn.Linear(model_dim, np.prod(self.output_dim))
-        
-        # self.dropout = nn.Dropout(p=dropout)
-        
-    def encoder(
-        self,
-        x_src,
-        x_src_mask
-    ):
-        x_src = self.residue_embedding(x_src)
-        x_src = self.positional_encoding(x_src, offset=0, stride=2)
-        
-        x_mem = self.transformer.encoder(
-            src=x_src, 
-            src_key_padding_mask=~x_src_mask
-        )
-        x_mem_mask = x_src_mask
-        
-        return x_mem, x_mem_mask
-    
-    def decoder(
-        self,
-        x_mem,
-        x_mem_mask,
-        charge,
-        ce,
-        softmax
-    ):
-        batch_size, max_residues, _ = x_mem.shape
-        max_bonds = max_residues - 1
-        
-        x_tgt = torch.zeros_like(x_mem[:,1:])
-        x_tgt = self.positional_encoding(x_tgt, offset=1, stride=2)
-        x_tgt_mask = x_mem_mask[:,1:]
-            
-        charge = charge - min(self.parent_charges)
-        charge = charge.view(-1,1).long()
-        x_mem = x_mem + self.charge_embedding(charge)
-        
-        ce = ce.view(-1,1).float()
-        x_mem = x_mem + self.ce_embedding(ce).unsqueeze(1)
-        
-        y = self.transformer.decoder(
-            tgt=x_tgt, 
-            memory=x_mem,
-            tgt_key_padding_mask=~x_tgt_mask.bool(),
-            memory_key_padding_mask=~x_mem_mask.bool()
-        )
-        y = self.classifier(y)
-        
+    def forward(self, x, x_mask, c, *, softmax):
+        x = self.encoder(x, input_mask=x_mask.unsqueeze(-1))
+        # x = self.dropout(x)
+        # condition on charge and energy
+        x = torch.cat([x,c.unsqueeze(1).expand(-1,x.shape[1],-1)],dim=-1)
+        x = self.decoder(x, input_mask=x_mask.unsqueeze(-1))
+        # residues -> bonds
+        # x = x[:,:-1] * x_mask[:,1:].unsqueeze(-1)
         if softmax:
-            y = y.flatten(1)
-            y = torch.softmax(y, dim=1)
-            y = y.reshape(y.shape)
-            
-        y = y.reshape(-1, max_bonds, *self.output_dim)
-        
-        return y
-        
-    def forward(
-        self, 
-        sequence,
-        sequence_mask,
-        charge,
-        ce,
-        softmax
-    ):
-        x_mem, x_mem_mask = self.encoder(
-            x_src=sequence.long(), 
-            x_src_mask=sequence_mask.bool()
-        )
-        y = self.decoder(
-            x_mem=x_mem,
-            x_mem_mask=x_mem_mask,
-            charge=charge.long(),
-            ce=ce.float(),
-            softmax=softmax
-        )
-        return y
+            x = torch.softmax(x.flatten(1), dim=1).reshape(x.shape)
+        return x
 
-    def masked_loss(self, loss_fn, input, target, mask):
+    def masked_loss(self, loss_fn, input, target, mask, reduce='mean'):
         mask = mask.bool()
         batch_size = input.shape[0]
-        loss = 0
+        loss = []
         for input_i, target_i, mask_i in zip(input, target, mask):
-            loss += loss_fn(input_i[mask_i].view(1,-1), target_i[mask_i].view(1,-1))
-        loss /= batch_size
+            loss.append(loss_fn(input_i[mask_i].view(1,-1), target_i[mask_i].view(1,-1)))
+        loss = torch.stack(loss)
+        if reduce == 'mean':
+            loss = torch.mean(loss)
+        elif reduce == 'median':
+            loss = torch.median(loss)
         return loss
     
     def step(self, batch, step):
         batch_size = batch['x'].shape[0]
+        max_length = batch['x'].shape[1]
 
+        x = batch['x']
+        x_mask = batch['x_mask']
+        
+        c = torch.stack([
+            batch['charge'],
+            batch['collision_energy']
+        ],-1).float()
+        
         y = batch['y']
-        y_mask = batch['y_mask']
+        # y_mask = batch['y_mask']
+        y_mask = x_mask[:,1:].view(batch_size,max_length-1,1,1,1).expand_as(batch['y_mask'])
         
         y_pred = self(
-            sequence=batch['x'],
-            sequence_mask=batch['x_mask'],
-            charge=batch['charge'],
-            ce=batch['collision_energy'],
+            x=x,
+            x_mask=x_mask,
+            c=c,
             softmax=step=='predict'
         )
+        y_pred = y_pred.reshape(*y_pred.shape[:-1],*self.output_dim)
         
         y_total = y.flatten(1).sum(1).view(batch_size,1,1,1,1)
         
@@ -203,16 +181,24 @@ class MSTransformer(pl.LightningModule):
 
         loss = self.masked_loss(
             F.cross_entropy, 
-            y_pred, 
-            y / y_total,
-            y_mask
+            input=y_pred, 
+            target=y / y_total,
+            mask=y_mask
         )
         
-        err = self.masked_loss(
-            lambda a, b: ((torch.softmax(a,dim=1) * b.sum() - b) / (b+1)).abs().mean(), 
-            y_pred.view(batch_size,-1),
-            y.view(batch_size,-1), 
-            y_mask.view(batch_size,-1)
+#         err = self.masked_loss(
+#             lambda a, b: ((torch.softmax(a,dim=1) * b.sum() - b) / (b+1)).abs().mean(), 
+#             input=y_pred,
+#             target=y, 
+#             mask=y_mask
+#         )
+        
+        rsqr = self.masked_loss(
+            lambda a, b: 1-(torch.softmax(a,dim=1) * b.sum() - b).square().sum()/(b-b.mean()).square().sum(), 
+            input=y_pred,
+            target=y, 
+            mask=y_mask,
+            reduce='median'
         )
         
         if step != 'predict':
@@ -220,23 +206,28 @@ class MSTransformer(pl.LightningModule):
                 f'{step}_cross_entropy',
                 loss,
                 batch_size=batch_size,
-                sync_dist=step=='valid'
+                sync_dist=step=='val'
             )
+#             self.log(
+#                 f'{step}_rel_abs_err',
+#                 err,
+#                 batch_size=batch_size,
+#                 sync_dist=step=='val'
+#             )
             self.log(
-                f'{step}_rel_abs_err',
-                err,
+                f'{step}_r_squared',
+                rsqr,
                 batch_size=batch_size,
-                sync_dist=step=='valid'
+                sync_dist=step=='val'
             )
         
-        return loss, err
-    
-    def training_step(self, batch, batch_idx):
-        loss, err = self.step(batch, step='train')
         return loss
     
+    def training_step(self, batch, batch_idx):
+        return self.step(batch, step='train')
+    
     def validation_step(self, batch, batch_idx):
-        self.step(batch, step='valid')
+        self.step(batch, step='val')
         
     def predict_step(self, batch, batch_idx=None):
         return self.step(batch, step='predict')

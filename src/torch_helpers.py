@@ -118,29 +118,39 @@ class RandomGroupSampler(Dataset):
 #         return self.df.loc[[idx]]
     
 class PandasHDFDataset(Dataset):
-    def __init__(self, hdf_path, primary_table=None, index_key='index', transform=None):
+    def __init__(
+        self,
+        hdf_path, 
+        primary_table=None,
+        index_key='index',
+        transform=None,
+        lazy=False
+    ):
         self.hdf_path = hdf_path
-        self.hdf = pd.HDFStore(hdf_path, mode='r')
-        self.primary_table = self.hdf.keys()[0].lstrip('/')[0] if primary_table is None else primary_table
         self.index_key = index_key
-        self.length = self.hdf.get_storer(self.primary_table).nrows
         self.transform = transform
+        self.primary_table = primary_table
+        self.lazy = lazy
         
-#         self.tables = {}
-#         for key in self.hdf.keys():
-#             tbl = HDFTable(
-#                 hdf=self.hdf,
-#                 table=key,
-#                 prefetch_size=prefetch_size, 
-#                 index_key=index_key
-#             )
-#             self.tables[key.lstrip('/')] = tbl
+        self.hdf = None
+        self.length = None
+        
+        self.hdf = pd.HDFStore(self.hdf_path, mode='r')
+        
+        self.primary_table = self.hdf.keys()[0].lstrip('/')[0] if self.primary_table is None else self.primary_table
+        self.length = self.hdf.get_storer(self.primary_table).nrows
+        
+        if self.lazy:
+            self.hdf.close()
+            self.hdf = None
         
     def __getitem__(self, idx):
+        if self.lazy and self.hdf is None:
+            # print(os.getpid())
+            self.hdf = pd.HDFStore(self.hdf_path, mode='r')
         item = {}
         item['index'] = idx
         for key in self.hdf.keys():
-            # value = self.tables[key][idx]
             value = self.hdf.select(key,where=f'{self.index_key}=={idx}')
             value = value.to_dict(orient='list')
             item[key.lstrip('/')] = value
@@ -152,7 +162,8 @@ class PandasHDFDataset(Dataset):
         return self.length
     
     def __del__(self):
-        self.hdf.close()
+        if self.hdf is not None:
+            self.hdf.close()
         
 def group_collate(collate_fn):
     def _group_collate(grouped_items):

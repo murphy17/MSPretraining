@@ -63,12 +63,12 @@ class SequenceModel(LightningModule):
             auc = auroc(y_pred[:,k], y[:,k])
             metrics['auc'].append(auc)
             
-            acc = accuracy(
-                y_pred[:,k], y[:,k],
-                num_classes=1, 
-                average='macro'
-            )
-            metrics['acc'].append(acc)
+#             acc = accuracy(
+#                 y_pred[:,k], y[:,k],
+#                 num_classes=1, 
+#                 average='macro'
+#             )
+#             metrics['acc'].append(acc)
             
         loss = torch.stack(losses).mean()
         
@@ -223,7 +223,7 @@ class MSModel(SequenceModel):
         self.classifier = ESMAttention1d(self.max_length, self.model_dim, self.output_dim)
 
     def forward(self, x, x_mask):
-        x, _ = self.transformer.encoder(x, x_mask)
+        x = self.transformer.encoder(x, x_mask.unsqueeze(-1))
         x = self.classifier(x, x_mask)
         return x
 
