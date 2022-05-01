@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 import pytorch_lightning as pl
-from sequence_models.convolutional import ByteNetLM, MaskedConv1d
+from sequence_models.convolutional import ByteNet, ByteNetLM, MaskedConv1d
 
 from .constants import MSConstants
 C = MSConstants()
@@ -28,43 +28,43 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[offset:offset+x.size(1)*stride:stride].unsqueeze(0)
         return self.dropout(x)
     
-class MSDecoder(nn.Module):
-    def __init__(
-        self,
-        input_dim,
-        model_dim,
-        output_dim
-    ):
-        super().__init__()
-        self.input_dim = input_dim
-        self.model_dim = model_dim
-        self.output_dim = output_dim
-        self.conv1 = MaskedConv1d(
-            in_channels=input_dim,
-            out_channels=model_dim,
-            kernel_size=2 # residues -> bonds
-        )
-        self.conv1.padding = 0 # residues -> bonds
-        self.relu1 = nn.ReLU()
-        self.conv2 = MaskedConv1d(
-            in_channels=model_dim,
-            out_channels=model_dim,
-            kernel_size=1
-        )
-        self.relu2 = nn.ReLU()
-        self.conv3 = MaskedConv1d(
-            in_channels=model_dim,
-            out_channels=output_dim,
-            kernel_size=1
-        )
+# class MSDecoder(nn.Module):
+#     def __init__(
+#         self,
+#         input_dim,
+#         model_dim,
+#         output_dim
+#     ):
+#         super().__init__()
+#         self.input_dim = input_dim
+#         self.model_dim = model_dim
+#         self.output_dim = output_dim
+#         self.conv1 = MaskedConv1d(
+#             in_channels=input_dim,
+#             out_channels=model_dim,
+#             kernel_size=2 # residues -> bonds
+#         )
+#         self.conv1.padding = 0 # residues -> bonds
+#         self.relu1 = nn.ReLU()
+#         self.conv2 = MaskedConv1d(
+#             in_channels=model_dim,
+#             out_channels=model_dim,
+#             kernel_size=1
+#         )
+#         self.relu2 = nn.ReLU()
+#         self.conv3 = MaskedConv1d(
+#             in_channels=model_dim,
+#             out_channels=output_dim,
+#             kernel_size=1
+#         )
     
-    def forward(self, x, input_mask):
-        x = self.conv1(x, input_mask)
-        x = self.relu1(x)
-        x = self.conv2(x, input_mask[:,1:])
-        x = self.relu2(x)
-        x = self.conv3(x, input_mask[:,1:])
-        return x
+#     def forward(self, x, input_mask):
+#         x = self.conv1(x, input_mask)
+#         x = self.relu1(x)
+#         x = self.conv2(x, input_mask[:,1:])
+#         x = self.relu2(x)
+#         x = self.conv3(x, input_mask[:,1:])
+#         return x
     
 class MSTransformer(pl.LightningModule):
     def __init__(
@@ -99,143 +99,128 @@ class MSTransformer(pl.LightningModule):
         self.embed_dim = 8
         self.kernel_size = 5
         self.r = 128
+        self.padding_idx = 0
+        self.masking_idx = self.input_dim
         
-        self.aa_lambda = 0.01
-
-        self.encoder = ByteNetLM(
-            n_tokens=self.input_dim,
+        self.x_encoder = ByteNet(
+            n_tokens=self.input_dim + 1,
             d_embedding=self.embed_dim,
             d_model=self.model_dim,
             n_layers=self.model_depth,
             kernel_size=self.kernel_size,
             r=self.r,
-            padding_idx=0, 
+            padding_idx=self.padding_idx, 
             causal=False,
             dropout=self.dropout,
             activation='gelu'
         )
-        self.encoder.decoder = nn.Identity()
-        # alternative would be one of these per charge x energy
-        self.decoder = MSDecoder(
-            input_dim=self.model_dim+self.condition_dim,
-            model_dim=self.model_dim,
-            output_dim=np.prod(self.output_dim)
+
+        self.y_encoder = ByteNet(
+            n_tokens=1, # unused
+            d_embedding=np.prod(self.output_dim)+self.condition_dim,
+            d_model=self.model_dim,
+            n_layers=self.model_depth,
+            kernel_size=self.kernel_size,
+            r=self.r,
+            padding_idx=self.padding_idx, 
+            causal=False,
+            dropout=self.dropout,
+            activation='gelu'
         )
+        self.y_encoder.embedder = nn.Identity()
         
-        self.classifier = nn.Linear(
+        # final AA classifier should be VERY SIMPLE!
+        self.conv1 = MaskedConv1d(
+            self.model_dim * 2, 
+            self.model_dim,
+            kernel_size=1
+        )
+        self.relu = nn.ReLU()
+        self.conv2 = MaskedConv1d(
             self.model_dim, 
             self.input_dim,
+            kernel_size=1
         )
 
-    def forward(self, x, x_mask, c, *, softmax=False, embedding=False):
-        z = self.encoder(x, input_mask=x_mask.unsqueeze(-1))
-        # x = self.dropout(x)
-        # condition on charge and energy
-        x = torch.cat([z,c.unsqueeze(1).expand(-1,x.shape[1],-1)],dim=-1)
-        x = self.decoder(x, input_mask=x_mask.unsqueeze(-1))
-        # residues -> bonds
-        # x = x[:,:-1] * x_mask[:,1:].unsqueeze(-1)
-        if softmax:
-            x = torch.softmax(x.flatten(1), dim=1).reshape(x.shape)
-        if embedding:
-            return x, z
-        return x
+    def forward(self, x, y, c, input_mask):
+        input_mask = input_mask.unsqueeze(-1)
 
-    def cross_entropy(self, logits, target, mask):
-        batch_size = logits.shape[0]
-        target = target.flatten(1)
-        logits = logits.flatten(1)
-        mask = mask.flatten(1)
-        xent = -((target * F.log_softmax(logits,1)) * mask).sum(1).mean()
-        return xent
-    
-    def r_squared(self, y_pred, y, mask):
-        batch_size = y.shape[0]
-        y_pred = y_pred.flatten(1)
-        y = y.flatten(1)
-        mask = mask.flatten(1)
-        y_mean = (y * mask).sum(1) / mask.sum(1)
-        ss_res = ((y - y_pred).square() * mask).sum(1)
-        ss_tot = ((y - y_mean.unsqueeze(1)).square() * mask).sum(1)
-        r2 = (1 - ss_res / ss_tot).mean()
-        return r2
-    
+        x = self.x_encoder(x, input_mask=input_mask)
+        
+        y = y.flatten(2)
+        c = c.unsqueeze(1).expand(-1, y.shape[1], -1)
+        y = torch.cat([y,c],-1)
+        y = self.y_encoder(y, input_mask=input_mask)
+#         y = x
+
+        z = torch.cat([x,y],-1)
+        z = self.conv1(z, input_mask=input_mask)
+        z = self.relu(z)
+        x_pred = self.conv2(z)
+
+        return x_pred
+
     def step(self, batch, step):
         batch_size = batch['x'].shape[0]
         max_length = batch['x'].shape[1]
 
         x = batch['x']
-        x_mask = batch['x_mask']
-        
+        padding_mask = batch['x_mask']
+
         c = torch.stack([
             batch['charge'],
             batch['collision_energy']
         ],-1).float()
-        
+
+        # could concat with an 'observed' msak too
         y = batch['y']
-        # y_mask = batch['y_mask']
-        y_mask = x_mask[:,1:].view(batch_size,max_length-1,1,1,1).expand_as(batch['y_mask'])
-        
-        y_pred, z = self(x, x_mask, c, softmax=False, embedding=True)
-        y_pred = y_pred.reshape(*y_pred.shape[:-1],*self.output_dim)
-        
-        y_total = y.flatten(1).sum(1).view(batch_size,1,1,1,1)
-        
-        xent_ms = self.cross_entropy(y_pred, y / y_total, y_mask)
-        
-        y_pred[y_mask==0] = -float('inf')
-        y_pred = torch.softmax(y_pred.flatten(1),1).reshape(y_pred.shape)
-        y_pred *= y_total
-        
-        rsqr = self.r_squared(y_pred, y, y_mask)
-        
-        # regularize the embedding: make the AA predictable
-        # ... from the local embedding only? from the rest?
-        # hmm... ok...
-        # what if you set this up very very differently
-        # "given the spectrum and the punctured sequence, predict the AA"
-        
-        x_pred = self.classifier(z)
-        xent_aa = F.cross_entropy(
-            x_pred.reshape(-1,self.input_dim),
-            x.flatten()
+        y = y / y.flatten(1).sum(-1).view(-1,1,1,1,1)
+        y_pad = torch.zeros(batch_size,1,*self.output_dim,device=self.device)
+        y = torch.cat([y,y_pad],1)
+
+        # to start, just a single AA
+        masking_idx = torch.multinomial(padding_mask.float(), 1).squeeze()
+        dropout_mask = torch.zeros_like(padding_mask,dtype=torch.bool)
+        dropout_mask[range(batch_size),masking_idx] = 1
+        x_masked = x.clone()
+        x_masked[dropout_mask] = self.masking_idx
+
+        x_pred = self(x_masked, y, c, padding_mask)
+
+        xent = F.cross_entropy(
+            x_pred[range(batch_size),masking_idx],
+            x[range(batch_size),masking_idx]
         )
         
-        # acc_aa = (x_pred.argmax(-1) == x).float().mean()
+        acc = (
+            x_pred[range(batch_size),masking_idx].argmax(-1) ==
+            x[range(batch_size),masking_idx]
+        ).float().mean()
         
-        loss = xent_ms + self.aa_lambda * xent_aa
+        self.log(
+            f'{step}_cross_entropy',
+            xent,
+            batch_size=batch_size,
+            sync_dist=step=='val'
+        )
         
-        if step == 'predict':
-            return y_pred
-        else:
-            self.log(
-                f'{step}_cross_entropy',
-                xent_ms,
-                batch_size=batch_size,
-                sync_dist=step=='val'
-            )
-            self.log(
-                f'{step}_aa_cross_entropy',
-                xent_aa,
-                batch_size=batch_size,
-                sync_dist=step=='val'
-            )
-            self.log(
-                f'{step}_r_squared',
-                rsqr,
-                batch_size=batch_size,
-                sync_dist=step=='val'
-            )
-            return loss
-    
+        self.log(
+            f'{step}_accuracy',
+            acc,
+            batch_size=batch_size,
+            sync_dist=step=='val'
+        )
+        
+        return xent
+
     def training_step(self, batch, batch_idx):
         return self.step(batch, step='train')
     
     def validation_step(self, batch, batch_idx):
         self.step(batch, step='val')
         
-    def predict_step(self, batch, batch_idx=None):
-        return self.step(batch, step='predict')
+#     def predict_step(self, batch, batch_idx=None):
+#         return self.step(batch, step='predict')
     
     def configure_optimizers(self):
         opt = torch.optim.Adam(self.parameters(), lr=self.lr)
