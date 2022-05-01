@@ -44,6 +44,8 @@ class MSDataModule(LightningDataModule):
         self.prefetch = prefetch
         self.tmp_dir = None
         self.pin_memory = True
+        self.prefetch_factor = 4
+        self.persistent_workers = False
         
     def setup(self, stage=None):
         if self.tmp_env:
@@ -103,16 +105,6 @@ class MSDataModule(LightningDataModule):
                 num_workers=self.num_workers,
                 verbose=True
             )
-#             self.dataset = Prefetch(
-#                 self.dataset, 
-#                 num_workers=self.num_workers,
-#                 batch_size=1,
-#                 verbose=True
-#             )
-            
-        train_idxs = [i for i in train_idxs if i<len(self.dataset)]
-        val_idxs = [i for i in val_idxs if i<len(self.dataset)]
-        test_idxs = [i for i in test_idxs if i<len(self.dataset)]
             
         self.rng.shuffle(train_idxs)
         self.rng.shuffle(val_idxs)
@@ -131,8 +123,8 @@ class MSDataModule(LightningDataModule):
             shuffle=True,
             drop_last=True,
             pin_memory=self.pin_memory,
-#             persistent_workers=True,
-#             prefetch_factor=2
+            prefetch_factor=self.prefetch_factor,
+            persistent_workers=self.persistent_workers
         )
         return dataloader
 
@@ -145,8 +137,8 @@ class MSDataModule(LightningDataModule):
             shuffle=False,
             drop_last=False,
             pin_memory=self.pin_memory,
-#             persistent_workers=True,
-#             prefetch_factor=2
+            prefetch_factor=self.prefetch_factor,
+            persistent_workers=self.persistent_workers
         )
         return dataloader
     
@@ -159,7 +151,8 @@ class MSDataModule(LightningDataModule):
             shuffle=False,
             drop_last=False,
             pin_memory=self.pin_memory,
-#             persistent_workers=True
+            prefetch_factor=self.prefetch_factor,
+            persistent_workers=self.persistent_workers
         )
         return dataloader
     
@@ -173,6 +166,9 @@ class MSDataModule(LightningDataModule):
             drop_last=False
         )
         return dataloader
+    
+    
+    
     
 class PeptideDataModule(LightningDataModule):
     def __init__(

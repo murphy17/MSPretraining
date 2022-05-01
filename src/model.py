@@ -172,18 +172,24 @@ class MSTransformer(pl.LightningModule):
             batch['collision_energy']
         ],-1).float()
 
-        # could concat with an 'observed' msak too
         y = batch['y']
+
+        # this will affect longer spectra more...?
+#         y_mask = torch.rand_like(y) < self.spectrum_dropout
+#         y[y_mask] = 0
+        
+        # normalize spectrum; for domain reasons, but also fixes dropout ^^ ?
         y = y / y.flatten(1).sum(-1).view(-1,1,1,1,1)
+        
         y_pad = torch.zeros(batch_size,1,*self.output_dim,device=self.device)
         y = torch.cat([y,y_pad],1)
 
         # to start, just a single AA
         masking_idx = torch.multinomial(padding_mask.float(), 1).squeeze()
-        dropout_mask = torch.zeros_like(padding_mask,dtype=torch.bool)
-        dropout_mask[range(batch_size),masking_idx] = 1
+        x_mask = torch.zeros_like(padding_mask,dtype=torch.bool)
+        x_mask[range(batch_size),masking_idx] = 1
         x_masked = x.clone()
-        x_masked[dropout_mask] = self.masking_idx
+        x_masked[x_mask] = self.masking_idx
 
         x_pred = self(x_masked, y, c, padding_mask)
 
@@ -224,4 +230,9 @@ class MSTransformer(pl.LightningModule):
     
     def configure_optimizers(self):
         opt = torch.optim.Adam(self.parameters(), lr=self.lr)
-        return opt
+        sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt,mode='min')
+        return {
+           'optimizer': opt,
+           'lr_scheduler': sched,
+           'monitor': 'train_cross_entropy'
+        }
