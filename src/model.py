@@ -96,15 +96,19 @@ class MSTransformer(pl.LightningModule):
         self.dropout = dropout
         self.lr = lr
         
+        self.embed_dim = 8
+        self.kernel_size = 5
+        self.r = 128
+        
         self.aa_lambda = 0.01
 
         self.encoder = ByteNetLM(
             n_tokens=self.input_dim,
-            d_embedding=8,
+            d_embedding=self.embed_dim,
             d_model=self.model_dim,
             n_layers=self.model_depth,
-            kernel_size=5,
-            r=self.model_dim,
+            kernel_size=self.kernel_size,
+            r=self.r,
             padding_idx=0, 
             causal=False,
             dropout=self.dropout,
@@ -117,13 +121,7 @@ class MSTransformer(pl.LightningModule):
             model_dim=self.model_dim,
             output_dim=np.prod(self.output_dim)
         )
-#         self.decoder = ByteNetLM(
-#             n_tokens=np.prod(self.output_dim),
-#             d_embedding=self.model_dim+self.condition_dim, 
-#             **self.bytenet_params
-#         )
-#         self.decoder.embedder.embedder = nn.Identity()
-
+        
         self.classifier = nn.Linear(
             self.model_dim, 
             self.input_dim,
