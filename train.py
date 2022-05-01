@@ -1,20 +1,21 @@
 import os
 from argparse import ArgumentParser
-from pytorch_lightning import Trainer
+from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from src.datamodule import MSDataModule
 from src.model import MSTransformer
 # from pytorch_lightning.plugins.training_type.ddp import DDPPlugin
 
 def main(hparams):
+    seed_everything(hparams['random_state'], workers=True)
     dm = MSDataModule(**hparams)
     model = MSTransformer(**hparams)
     trainer = Trainer(
         gpus=hparams['num_gpus'],
-#         num_nodes=hparams['num_nodes'],
+        num_nodes=hparams['num_nodes'],
         max_epochs=hparams['max_epochs'],
         precision=hparams['precision'],
-#         strategy=hparams['strategy'],
+        strategy=hparams['strategy'],
 #         strategy=DDPPlugin(find_unused_parameters=False),
         callbacks=[
             EarlyStopping(
@@ -44,12 +45,8 @@ if __name__ == "__main__":
     # model
     parser.add_argument('--model_dim',type=int)
     parser.add_argument('--model_depth',type=int)
-#     parser.add_argument('--num_heads',type=int)
     parser.add_argument('--lr',type=float)
     parser.add_argument('--dropout',type=float)
-#     parser.add_argument('--max_length',type=int)
-#     parser.add_argument('--temperature',type=float)
-#     parser.add_argument('--negative_sampling',type=bool)
 
     # trainer
     parser.add_argument('--num_gpus',type=int)

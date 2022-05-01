@@ -95,6 +95,8 @@ class MSTransformer(pl.LightningModule):
         self.model_depth = model_depth
         self.dropout = dropout
         self.lr = lr
+        
+        self.aa_lambda = 0.01
 
         self.encoder = ByteNetLM(
             n_tokens=self.input_dim,
@@ -122,31 +124,25 @@ class MSTransformer(pl.LightningModule):
 #         )
 #         self.decoder.embedder.embedder = nn.Identity()
 
-    def forward(self, x, x_mask, c, *, softmax):
-        x = self.encoder(x, input_mask=x_mask.unsqueeze(-1))
+        self.classifier = nn.Linear(
+            self.model_dim, 
+            self.input_dim,
+        )
+
+    def forward(self, x, x_mask, c, *, softmax=False, embedding=False):
+        z = self.encoder(x, input_mask=x_mask.unsqueeze(-1))
         # x = self.dropout(x)
         # condition on charge and energy
-        x = torch.cat([x,c.unsqueeze(1).expand(-1,x.shape[1],-1)],dim=-1)
+        x = torch.cat([z,c.unsqueeze(1).expand(-1,x.shape[1],-1)],dim=-1)
         x = self.decoder(x, input_mask=x_mask.unsqueeze(-1))
         # residues -> bonds
         # x = x[:,:-1] * x_mask[:,1:].unsqueeze(-1)
         if softmax:
             x = torch.softmax(x.flatten(1), dim=1).reshape(x.shape)
+        if embedding:
+            return x, z
         return x
 
-#     def masked_loss(self, loss_fn, input, target, mask, reduce='mean'):
-#         mask = mask.bool()
-#         batch_size = input.shape[0]
-#         loss = []
-#         for input_i, target_i, mask_i in zip(input, target, mask):
-#             loss.append(loss_fn(input_i[mask_i].view(1,-1), target_i[mask_i].view(1,-1)))
-#         loss = torch.stack(loss)
-#         if reduce == 'mean':
-#             loss = torch.mean(loss)
-#         elif reduce == 'median':
-#             loss = torch.median(loss)
-#         return loss
-    
     def cross_entropy(self, logits, target, mask):
         batch_size = logits.shape[0]
         target = target.flatten(1)
@@ -182,12 +178,12 @@ class MSTransformer(pl.LightningModule):
         # y_mask = batch['y_mask']
         y_mask = x_mask[:,1:].view(batch_size,max_length-1,1,1,1).expand_as(batch['y_mask'])
         
-        y_pred = self(x, x_mask, c, softmax=step=='predict')
+        y_pred, z = self(x, x_mask, c, softmax=False, embedding=True)
         y_pred = y_pred.reshape(*y_pred.shape[:-1],*self.output_dim)
         
         y_total = y.flatten(1).sum(1).view(batch_size,1,1,1,1)
         
-        loss = self.cross_entropy(y_pred, y / y_total, y_mask)
+        xent_ms = self.cross_entropy(y_pred, y / y_total, y_mask)
         
         y_pred[y_mask==0] = -float('inf')
         y_pred = torch.softmax(y_pred.flatten(1),1).reshape(y_pred.shape)
@@ -195,12 +191,34 @@ class MSTransformer(pl.LightningModule):
         
         rsqr = self.r_squared(y_pred, y, y_mask)
         
+        # regularize the embedding: make the AA predictable
+        # ... from the local embedding only? from the rest?
+        # hmm... ok...
+        # what if you set this up very very differently
+        # "given the spectrum and the punctured sequence, predict the AA"
+        
+        x_pred = self.classifier(z)
+        xent_aa = F.cross_entropy(
+            x_pred.reshape(-1,self.input_dim),
+            x.flatten()
+        )
+        
+        # acc_aa = (x_pred.argmax(-1) == x).float().mean()
+        
+        loss = xent_ms + self.aa_lambda * xent_aa
+        
         if step == 'predict':
             return y_pred
         else:
             self.log(
                 f'{step}_cross_entropy',
-                loss,
+                xent_ms,
+                batch_size=batch_size,
+                sync_dist=step=='val'
+            )
+            self.log(
+                f'{step}_aa_cross_entropy',
+                xent_aa,
                 batch_size=batch_size,
                 sync_dist=step=='val'
             )

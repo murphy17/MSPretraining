@@ -4,9 +4,6 @@ from copy import deepcopy
 import os
 import pandas as pd
 from collections import defaultdict
-import pickle
-# import zlib
-import lz4.frame as lz4
 
 bash = lambda s: os.popen(s).read().rstrip().split('\n')
 
@@ -24,41 +21,6 @@ class NamedTensorDataset(Dataset):
     def __len__(self):
         return len(self.items)
 
-# class GroupDataset(Dataset):
-#     def __init__(
-#         self,
-#         dataset,
-#         group_fn,
-#         min_size=1,
-#         max_size=float('inf'),
-#         transform=None,
-#         limit=None
-#     ):
-#         self.dataset = dataset
-#         self.group_fn = group_fn
-#         self.transform = transform
-#         self.min_size = min_size
-#         self.max_size = max_size
-#         self.groups = defaultdict(list)
-        
-#         for i, item in tqdm(enumerate(self.dataset)):
-#             if i == limit:
-#                 break
-#             key = self.group_fn(item)
-#             self.groups[key].append(i)
-                
-#         self.keys = [k for k,v in self.groups.items() if self.min_size <= len(v) <= self.max_size]
-            
-#     def __getitem__(self, idx):
-#         idxs = self.groups[self.keys[idx]]
-#         items = [self.dataset[idx] for idx in idxs]
-#         if self.transform:
-#             items = self.transform(items)
-#         return items
-        
-#     def __len__(self):
-#         return len(self.keys)
-
 class Group(Dataset):
     def __init__(self, dataset, groups):
         self.dataset = dataset
@@ -71,29 +33,152 @@ class Group(Dataset):
     def __len__(self):
         return len(self.groups)
 
-class MemoryCache(Dataset):
-    def __init__(self, dataset, transform=None, compress=False):
+# from diskcache import FanoutCache
+
+from torch.utils.data import DataLoader
+import pickle
+# import lz4.frame as lz4
+import gzip
+from tqdm import tqdm
+
+# point of this is to wrap around datasets with slow implementations
+# and just pull the whole thing into memory
+class CacheDataset(Dataset):
+    def __init__(
+        self, 
+        dataset, path, 
+        *,
+        transform=None,
+        num_workers=1, 
+        verbose=False
+    ):
         self.dataset = dataset
+        self.path = path
+        self.num_workers = num_workers
+        self.verbose = verbose
         self.transform = transform
-        self.compress = compress
-        self.cache = [None] * len(dataset)
-    
+        
+        self.cache = []
+
+        if os.path.exists(self.path):
+            with gzip.open(self.path,'rb') as f:
+                self.cache = pickle.load(f)
+        else:
+            assert not dist.is_initialized()
+            dataloader = DataLoader(
+                self.dataset,
+                batch_size=1,
+                collate_fn=lambda x: x,
+                num_workers=self.num_workers,
+                shuffle=False,
+                drop_last=False
+            )
+            for batch in tqdm(dataloader,disable=not self.verbose):
+                self.cache.extend(batch)
+            
+            with gzip.open(self.path,'wb') as f:
+                pickle.dump(self.cache, f)
+
     def __getitem__(self, idx):
-        if self.cache[idx] is None:
-            item = self.dataset[idx]
-            if self.compress:
-                self.cache[idx] = lz4.compress(pickle.dumps(item))
-            else:
-                self.cache[idx] = item
         item = self.cache[idx]
-        if self.compress:
-            item = pickle.loads(lz4.decompress(compressed))
-        if self.transform is not None:
+        if self.transform:
             item = self.transform(item)
         return item
     
     def __len__(self):
-        return len(self.dataset)
+        return len(self.cache)
+        
+        
+    
+# class DiskCache(Dataset):
+#     def __init__(self, dataset, *, shards=1, timeout=1, tmpdir=None):
+#         self.dataset = dataset
+#         self.timeout = timeout
+#         self.shards = shards
+#         self.tmpdir = tmpdir
+#         self.cache = None
+        
+#     def __getitem__(self, idx):
+#         if self.cache is None:
+#             self.cache = FanoutCache(
+#                 directory=self.tmpdir,
+#                 shards=self.shards,
+#                 timeout=self.timeout,
+#                 eviction_policy='none',
+#                 size_limit=int(1e10)
+#             )
+#         if idx not in self.cache:
+#             item = self.dataset[idx]
+#             self.cache[idx] = item
+#         else:
+#             item = self.cache[idx]
+#         return item
+            
+#     def __len__(self):
+#         return len(self.dataset)
+        
+#     def __del__(self):
+#         if self.cache is not None:
+#             self.cache.close()
+
+# import pickle
+# import lz4.frame as lz4
+
+# class MemoryCache(Dataset):
+#     def __init__(self, dataset, transform=None, compress=False):
+#         self.dataset = dataset
+#         self.transform = transform
+#         self.compress = compress
+#         self.cache = {}
+    
+#     def __getitem__(self, idx):
+#         if idx not in self.cache:
+#             item = self.dataset[idx]
+#             if self.compress:
+#                 self.cache[idx] = lz4.compress(pickle.dumps(item))
+#             else:
+#                 self.cache[idx] = item
+#         item = self.cache[idx]
+#         if self.compress:
+#             item = pickle.loads(lz4.decompress(compressed))
+#         if self.transform is not None:
+#             item = self.transform(item)
+#         return item
+    
+#     def __len__(self):
+#         return len(self.dataset)
+    
+# from torch.utils.data import DataLoader, ConcatDataset
+# from tqdm import tqdm
+# class Prefetch(Dataset):
+#     def __init__(
+#         self,
+#         dataset,
+#         num_workers=0,
+#         batch_size=1,
+#         max_length=-1,
+#         verbose=False
+#     ):
+#         dataloader = DataLoader(
+#             dataset,
+#             batch_size=batch_size,
+#             collate_fn=lambda x: x,
+#             num_workers=num_workers,
+#             shuffle=False,
+#             drop_last=False
+#         )
+#         self.dataset = []
+#         for batch in tqdm(dataloader,disable=not verbose):
+#             self.dataset.extend(batch)
+#             if max_length > 0 and len(self.dataset) > max_length:
+#                 self.dataset = self.dataset[:max_length]
+#                 break
+    
+#     def __getitem__(self, idx):
+#         return self.dataset[idx]
+        
+#     def __len__(self):
+#         return len(self.dataset)
     
 class RandomGroupSampler(Dataset):
     def __init__(
@@ -151,29 +236,35 @@ class PandasHDFDataset(Dataset):
         primary_table=None,
         index_key='index',
         transform=None,
-        lazy=False
+        in_memory=False,
+#         lazy=False
     ):
         self.hdf_path = hdf_path
         self.index_key = index_key
         self.transform = transform
         self.primary_table = primary_table
-        self.lazy = lazy
+        self.in_memory = in_memory
+#         self.lazy = lazy
         
-        self.hdf = None
-        self.length = None
+#         self.hdf = None
+#         self.length = None
         
-        self.hdf = pd.HDFStore(self.hdf_path, mode='r')
+        # load whole thing into memory
+        if self.in_memory:
+            self.hdf = pd.HDFStore(self.hdf_path, mode='r', driver='H5FD_CORE')
+        else:
+            self.hdf = pd.HDFStore(self.hdf_path, mode='r')
         
         self.primary_table = self.hdf.keys()[0].lstrip('/')[0] if self.primary_table is None else self.primary_table
         self.length = self.hdf.get_storer(self.primary_table).nrows
         
-        if self.lazy:
-            self.hdf.close()
-            self.hdf = None
+#         if self.lazy:
+#             self.hdf.close()
+#             self.hdf = None
         
     def __getitem__(self, idx):
-        if self.lazy and self.hdf is None:
-            self.hdf = pd.HDFStore(self.hdf_path, mode='r')
+#         if self.lazy and self.hdf is None:
+#             self.hdf = pd.HDFStore(self.hdf_path, mode='r', driver='H5FD_CORE')
         item = {}
         item['index'] = idx
         for key in self.hdf.keys():

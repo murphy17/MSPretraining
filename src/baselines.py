@@ -192,6 +192,75 @@ class LinearModel(SequenceModel):
 #         x = self.classifier(x)
 #         return x
     
+
+from sequence_models.pretrained import load_model_and_alphabet
+from sequence_models.structure import Attention1d
+
+class ESMAttention1d(nn.Module):
+    """Outputs of the ESM model with the attention1d"""
+    def __init__(self, max_length, d_embedding, d_out):
+        super(ESMAttention1d, self).__init__()
+        self.attention1d = Attention1d(in_dim=d_embedding) # ???
+        self.linear = nn.Linear(d_embedding, d_embedding)
+        self.relu = nn.ReLU()
+        self.final = nn.Linear(d_embedding, d_out)
+    
+    def forward(self, x, input_mask):
+        x = self.attention1d(x, input_mask=input_mask.unsqueeze(-1))
+        x = self.relu(self.linear(x))
+        x = self.final(x)
+        return x
+    
+class ESMAttention1dMean(nn.Module):
+    """Outputs of the ESM model with averaging"""
+    def __init__(self, max_length, d_embedding, d_out):
+        super(ESMAttention1dMean, self).__init__()
+        self.linear = nn.Linear(d_embedding, d_embedding)
+        self.relu = nn.ReLU()
+        self.final = nn.Linear(d_embedding, d_out)
+    
+    def forward(self, x, input_mask):
+        x = (x*input_mask.unsqueeze(-1)).sum(1) / input_mask.unsqueeze(-1).sum(1)
+        x = self.relu(self.linear(x))
+        x = self.final(x)
+        return x
+
+class CARPModel(SequenceModel):
+    def __init__(
+        self,
+        fixed_weights,
+        **kwargs
+    ):
+        super().__init__(
+            model_dim=128,
+            model_depth=None,
+            num_residues=None,
+            dropout=None,
+            **kwargs
+        )
+
+        model, self.collater = load_model_and_alphabet('carp_600k')
+
+        self.encoder = model.embedder.requires_grad_(not fixed_weights)
+        self.classifier = ESMAttention1d(
+            self.max_length, 
+            self.model_dim, 
+            self.output_dim
+        )
+
+    def unbatch(self, batch):
+        batch_size = len(batch['sequence'])
+        x, = self.collater([[s] for s in batch['sequence']])
+        x = x.to(self.device)
+        x_mask = batch['x_mask']
+        y = batch['y']
+        return (x, x_mask, y), batch_size
+        
+    def forward(self, x, x_mask):
+        x = self.encoder(x, x_mask.unsqueeze(-1))
+        x = self.classifier(x, x_mask)
+        return x
+    
 from .model import MSTransformer
 
 class MSModel(SequenceModel):
@@ -227,53 +296,3 @@ class MSModel(SequenceModel):
         x = self.classifier(x, x_mask)
         return x
 
-
-from sequence_models.pretrained import load_model_and_alphabet
-from sequence_models.structure import Attention1d
-
-class ESMAttention1d(nn.Module):
-    """Outputs of the ESM model with the attention1d"""
-    def __init__(self, max_length, d_embedding, d_out):
-        super(ESMAttention1d, self).__init__()
-        self.attention1d = Attention1d(in_dim=d_embedding) # ???
-        self.linear = nn.Linear(d_embedding, d_embedding)
-        self.relu = nn.ReLU()
-        self.final = nn.Linear(d_embedding, d_out)
-    
-    def forward(self, x, input_mask):
-        x = self.attention1d(x, input_mask=input_mask.unsqueeze(-1))
-        x = self.relu(self.linear(x))
-        x = self.final(x)
-        return x
-
-class CARPModel(SequenceModel):
-    def __init__(
-        self,
-        fixed_weights,
-        **kwargs
-    ):
-        super().__init__(
-            model_dim=128,
-            model_depth=None,
-            num_residues=None,
-            dropout=None,
-            **kwargs
-        )
-
-        model, self.collater = load_model_and_alphabet('carp_600k')
-
-        self.encoder = model.embedder.requires_grad_(not fixed_weights)
-        self.classifier = ESMAttention1d(self.max_length, self.model_dim, self.output_dim)
-
-    def unbatch(self, batch):
-        batch_size = len(batch['sequence'])
-        x, = self.collater([[s] for s in batch['sequence']])
-        x = x.to(self.device)
-        x_mask = batch['x_mask'].unsqueeze(-1)
-        y = batch['y']
-        return (x, x_mask, y), batch_size
-        
-    def forward(self, x, x_mask):
-        x = self.encoder(x, x_mask)
-        x = self.classifier(x, x_mask)
-        return x
