@@ -278,21 +278,16 @@ class MSModel(SequenceModel):
             **kwargs
         )
 
-        self.transformer = MSTransformer.load_from_checkpoint(checkpoint)
+        self.encoder = MSTransformer.load_from_checkpoint(checkpoint)
         if naive:
-            self.transformer = MSTransformer(**dict(self.transformer.hparams))
-        self.transformer.requires_grad_(not fixed_weights)
+            self.encoder = MSTransformer(**dict(self.encoder.hparams))
+        self.encoder = self.encoder.x_encoder
+        self.encoder.requires_grad_(not fixed_weights)
 
-#         self.classifier = nn.Sequential(
-#             nn.Linear(self.model_dim, self.model_dim),
-#             nn.LeakyReLU(0.2,inplace=True),
-#             nn.Linear(self.model_dim, self.output_dim)
-#         )
-        
         self.classifier = ESMAttention1d(self.max_length, self.model_dim, self.output_dim)
 
     def forward(self, x, x_mask):
-        x = self.transformer.encoder(x, x_mask.unsqueeze(-1))
+        x = self.encoder(x, x_mask.unsqueeze(-1))
         x = self.classifier(x, x_mask)
         return x
 

@@ -44,7 +44,7 @@ class MSDataModule(LightningDataModule):
         self.prefetch = prefetch
         self.tmp_dir = None
         self.pin_memory = True
-        self.prefetch_factor = 4
+        self.prefetch_factor = 8
         self.persistent_workers = False
         
     def setup(self, stage=None):
@@ -85,19 +85,9 @@ class MSDataModule(LightningDataModule):
         )
         # --- END KLUDGE ---
 
-        # I'm not exactly sure if this is doing anything
-        # it delays opening the HDF until an element is requested
-        # so (I think???) each worker gets its own descriptor
-        # per hdf5py: "avoid forking and then loading"
-#         self.dataset = PandasHDFDataset(
-#             self.hdf_path,
-#             primary_table='Spectrum',
-#             transform=transform_spectrum,
-#             lazy=True
-#         )
-        
         # turns out the HDF reading + conversion is slowest part by far
-        # DO NOT RUN THIS IN DISTRIBUTED!!!
+        # so just load the whole thing in memory from a pickle
+        # DO NOT RUN THIS IN DISTRIBUTED IF FILE NOT ALREADY GENERATED!!!
         if self.prefetch:
             self.dataset = CacheDataset(
                 self.dataset,
@@ -135,9 +125,9 @@ class MSDataModule(LightningDataModule):
             collate_fn=zero_padding_collate,
             num_workers=self.num_workers,
             shuffle=False,
-            drop_last=False,
+            drop_last=True,
             pin_memory=self.pin_memory,
-            prefetch_factor=self.prefetch_factor,
+            prefetch_factor=self.prefetch_factor, # len(self.val_dataset)//(self.batch_size*self.num_workers),
             persistent_workers=self.persistent_workers
         )
         return dataloader

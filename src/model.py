@@ -8,64 +8,7 @@ from sequence_models.convolutional import ByteNet, ByteNetLM, MaskedConv1d
 from .constants import MSConstants
 C = MSConstants()
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-np.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, d_model)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x: torch.Tensor, stride: int = 1, offset: int = 0) -> torch.Tensor:
-        """
-        Args:
-            x: Tensor, shape [seq_len, batch_size, embedding_dim]
-        """
-        x = x + self.pe[offset:offset+x.size(1)*stride:stride].unsqueeze(0)
-        return self.dropout(x)
-    
-# class MSDecoder(nn.Module):
-#     def __init__(
-#         self,
-#         input_dim,
-#         model_dim,
-#         output_dim
-#     ):
-#         super().__init__()
-#         self.input_dim = input_dim
-#         self.model_dim = model_dim
-#         self.output_dim = output_dim
-#         self.conv1 = MaskedConv1d(
-#             in_channels=input_dim,
-#             out_channels=model_dim,
-#             kernel_size=2 # residues -> bonds
-#         )
-#         self.conv1.padding = 0 # residues -> bonds
-#         self.relu1 = nn.ReLU()
-#         self.conv2 = MaskedConv1d(
-#             in_channels=model_dim,
-#             out_channels=model_dim,
-#             kernel_size=1
-#         )
-#         self.relu2 = nn.ReLU()
-#         self.conv3 = MaskedConv1d(
-#             in_channels=model_dim,
-#             out_channels=output_dim,
-#             kernel_size=1
-#         )
-    
-#     def forward(self, x, input_mask):
-#         x = self.conv1(x, input_mask)
-#         x = self.relu1(x)
-#         x = self.conv2(x, input_mask[:,1:])
-#         x = self.relu2(x)
-#         x = self.conv3(x, input_mask[:,1:])
-#         return x
-    
+# misnomer
 class MSTransformer(pl.LightningModule):
     def __init__(
         self,
@@ -96,6 +39,7 @@ class MSTransformer(pl.LightningModule):
         self.dropout = dropout
         self.lr = lr
         
+        self.encoder_dropout = 0
         self.embed_dim = 8
         self.kernel_size = 5
         self.r = 128
@@ -111,7 +55,7 @@ class MSTransformer(pl.LightningModule):
             r=self.r,
             padding_idx=self.padding_idx, 
             causal=False,
-            dropout=self.dropout,
+            dropout=self.encoder_dropout,
             activation='gelu'
         )
 
@@ -124,7 +68,7 @@ class MSTransformer(pl.LightningModule):
             r=self.r,
             padding_idx=self.padding_idx, 
             causal=False,
-            dropout=self.dropout,
+            dropout=self.encoder_dropout,
             activation='gelu'
         )
         self.y_encoder.embedder = nn.Identity()
@@ -135,7 +79,7 @@ class MSTransformer(pl.LightningModule):
             self.model_dim,
             kernel_size=1
         )
-        self.relu = nn.ReLU()
+        self.relu = nn.ReLU() # GELU?
         self.conv2 = MaskedConv1d(
             self.model_dim, 
             self.input_dim,
@@ -151,7 +95,6 @@ class MSTransformer(pl.LightningModule):
         c = c.unsqueeze(1).expand(-1, y.shape[1], -1)
         y = torch.cat([y,c],-1)
         y = self.y_encoder(y, input_mask=input_mask)
-#         y = x
 
         z = torch.cat([x,y],-1)
         z = self.conv1(z, input_mask=input_mask)
@@ -175,11 +118,12 @@ class MSTransformer(pl.LightningModule):
         y = batch['y']
 
         # this will affect longer spectra more...?
-#         y_mask = torch.rand_like(y) < self.spectrum_dropout
-#         y[y_mask] = 0
+        if self.training and self.dropout > 0:
+            y_mask = torch.rand_like(y) < self.dropout
+            y[y_mask] = 0
         
         # normalize spectrum; for domain reasons, but also fixes dropout ^^ ?
-        y = y / y.flatten(1).sum(-1).view(-1,1,1,1,1)
+        y = y / y.flatten(1).sum(-1).clamp(1,float('inf')).view(-1,1,1,1,1)
         
         y_pad = torch.zeros(batch_size,1,*self.output_dim,device=self.device)
         y = torch.cat([y,y_pad],1)
@@ -190,6 +134,11 @@ class MSTransformer(pl.LightningModule):
         x_mask[range(batch_size),masking_idx] = 1
         x_masked = x.clone()
         x_masked[x_mask] = self.masking_idx
+        
+        # how well does it do with just sequence?
+        if self.dropout == 1:
+            y = torch.zeros_like(y)
+            c = torch.zeros_like(c)
 
         x_pred = self(x_masked, y, c, padding_mask)
 
@@ -230,9 +179,4 @@ class MSTransformer(pl.LightningModule):
     
     def configure_optimizers(self):
         opt = torch.optim.Adam(self.parameters(), lr=self.lr)
-        sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt,mode='min')
-        return {
-           'optimizer': opt,
-           'lr_scheduler': sched,
-           'monitor': 'train_cross_entropy'
-        }
+        return opt

@@ -2,11 +2,12 @@ import os
 from argparse import ArgumentParser
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.callbacks import ModelCheckpoint
 from src.datamodule import MSDataModule
 from src.model import MSTransformer
-# from pytorch_lightning.plugins.training_type.ddp import DDPPlugin
 
-def main(hparams):
+def main(args):
+    hparams = vars(args)
     seed_everything(hparams['random_state'], workers=True)
     dm = MSDataModule(**hparams)
     model = MSTransformer(**hparams)
@@ -15,14 +16,19 @@ def main(hparams):
         num_nodes=hparams['num_nodes'],
         max_epochs=hparams['max_epochs'],
         precision=hparams['precision'],
-        val_check_interval=hparams['val_check_interval'],
+#         val_check_interval=hparams['val_check_interval'],
         strategy=hparams['strategy'],
-#         strategy=DDPPlugin(find_unused_parameters=False),
         callbacks=[
-            EarlyStopping(
-                monitor=hparams['es_monitor'],
+#             EarlyStopping(
+#                 monitor=hparams['es_monitor'],
+#                 mode=hparams['es_mode'],
+#                 patience=hparams['es_patience']
+#             ),
+            ModelCheckpoint(
+                monitor=hparams['es_monitor'], 
                 mode=hparams['es_mode'],
-                patience=hparams['es_patience']
+                save_top_k=1,
+                filename='{epoch}-{step}-best'
             )
         ]
     )
@@ -30,7 +36,8 @@ def main(hparams):
     
 if __name__ == "__main__":
     root_dir = os.path.dirname(os.path.realpath(__file__))
-    parser = ArgumentParser(add_help=False)
+    parser = ArgumentParser()
+#     parser = Trainer.add_argparse_args(parser)
     
     # datamodule
     parser.add_argument('--hdf_path',type=str)
@@ -57,7 +64,7 @@ if __name__ == "__main__":
     parser.add_argument('--es_monitor',type=str)
     parser.add_argument('--es_mode',type=str)
     parser.add_argument('--es_patience',type=int)
-    parser.add_argument('--val_check_interval',type=int)
+#     parser.add_argument('--val_check_interval',type=float)
 
     # cluster
     parser.add_argument('--num_nodes',type=int)
@@ -68,6 +75,6 @@ if __name__ == "__main__":
     # tensorboard
     parser.add_argument('--login_node',type=str)
 
-    hparams = parser.parse_args()
+    args = parser.parse_args()
 
-    main(vars(hparams))
+    main(args)
