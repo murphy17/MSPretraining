@@ -141,6 +141,10 @@ class MSTransformer(pl.LightningModule):
             c = torch.zeros_like(c)
 
         x_pred = self(x_masked, y, c, padding_mask)
+        
+        # kludge
+        if step == 'predict':
+            return x_pred.argmax(-1), masking_idx
 
         xent = F.cross_entropy(
             x_pred[range(batch_size),masking_idx],
@@ -174,8 +178,8 @@ class MSTransformer(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         self.step(batch, step='val')
         
-#     def predict_step(self, batch, batch_idx=None):
-#         return self.step(batch, step='predict')
+    def predict_step(self, batch, batch_idx=None):
+        return self.step(batch, step='predict')
     
     def configure_optimizers(self):
         opt = torch.optim.Adam(self.parameters(), lr=self.lr)

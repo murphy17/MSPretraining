@@ -60,7 +60,7 @@ class MSDataModule(LightningDataModule):
             hdf_path,
             primary_table='Spectrum',
             transform=transform_spectrum,
-            in_memory=True
+#             in_memory=True # doesnt work on ppc
         )
         
         seqs = self.dataset.hdf.select(
