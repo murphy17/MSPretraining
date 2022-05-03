@@ -12,7 +12,8 @@ from torch.utils.data import Dataset, IterableDataset, get_worker_info
 import torch.distributed as dist
 
 class NamedTensorDataset(Dataset):
-    def __init__(self,**kwargs):
+    def __init__(self,name,/,**kwargs):
+        self.name = name
         self.items = [dict(zip(kwargs.keys(),item)) for item in zip(*kwargs.values())]
 
     def __getitem__(self, idx):

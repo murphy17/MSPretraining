@@ -12,9 +12,7 @@ class SequenceModel(LightningModule):
         model_dim,
         model_depth,
         num_residues,
-        max_length,
         dropout,
-        output_weights,
         lr
     ):
         super().__init__()
@@ -22,11 +20,11 @@ class SequenceModel(LightningModule):
         self.model_dim = model_dim
         self.model_depth = model_depth
         self.num_residues = num_residues
-        self.max_length = max_length
         self.output_dim = output_dim
         self.dropout = dropout
-        self.output_weights = output_weights
+#         self.output_weights = output_weights
         self.lr = lr
+        self.name = None
         
         if num_residues is not None:
             self.embedding = nn.Embedding(
@@ -51,40 +49,27 @@ class SequenceModel(LightningModule):
         
         y_pred = self(x, x_mask)
         
-        losses = []
-        metrics = defaultdict(list)
+        metrics = {}
         
-        for k in range(self.output_dim):
-            loss = F.binary_cross_entropy_with_logits(
-                y_pred[:,k], y[:,k].float()
-            )
-            losses.append(loss * self.output_weights[k][1])
+        if self.output_dim == 1:
+            y_pred = y_pred.squeeze(-1)
+            loss = F.binary_cross_entropy_with_logits(y_pred, y.float())
+        else:
+            loss = F.cross_entropy(y_pred, y)
             
-            auc = auroc(y_pred[:,k], y[:,k])
-            metrics['auc'].append(auc)
-            
-#             acc = accuracy(
-#                 y_pred[:,k], y[:,k],
-#                 num_classes=1, 
-#                 average='macro'
-#             )
-#             metrics['acc'].append(acc)
-            
-        loss = torch.stack(losses).mean()
+        auc = auroc(y_pred, y, average='macro')
+        metrics['auc'] = auc
         
         if step != 'predict':
             self.log(f'{step}_loss',loss,batch_size=batch_size)
 
             for m in metrics:
-                for i,(k,w) in enumerate(self.output_weights):
-                    if w==0: continue
-                    self.log(
-                        f'{step}_{m}_{k}',
-                        metrics[m][i],
-                        batch_size=batch_size,
-#                         sync_dist=step=='val'
-                    )
-            
+                self.log(
+                    f'{step}_{m}_{self.name}',
+                    metrics[m],
+                    batch_size=batch_size,
+                )
+
         return loss, metrics, y_pred
     
     def training_step(self, batch, batch_idx):
@@ -109,7 +94,7 @@ class CNNModel(SequenceModel):
         kernel_size,
         **kwargs
     ):
-        super().__init__(**kwargs,max_length=None)
+        super().__init__(**kwargs)
         self.kernel_size = kernel_size
         
         encoder_layers = []
@@ -149,7 +134,6 @@ class LinearModel(SequenceModel):
     ):
         super().__init__(
             **kwargs,
-            max_length=None,
             model_depth=None,
             dropout=None
         )
@@ -162,43 +146,14 @@ class LinearModel(SequenceModel):
         x = x.sum(-1) / x_mask.sum(-1).view(-1,1)
         x = self.classifier(x)
         return x
-    
-# doens't work
-# class RNNModel(SequenceModel):
-#     def __init__(
-#         self,
-#         **kwargs
-#     ):
-#         super().__init__(**kwargs)
-        
-#         self.encoder = nn.LSTM(
-#             input_size=self.model_dim,
-#             hidden_size=self.model_dim,
-#             num_layers=self.model_depth,
-#             batch_first=True,
-#             dropout=self.dropout,
-#             bidirectional=False
-#         )
-        
-#         self.classifier = nn.Linear(
-#             self.model_dim, 
-#             self.output_dim
-#         )
-        
-#     def forward(self, x):
-#         x = self.embedding(x)
-#         x, _ = self.encoder(x)
-#         x = x[:,-1]
-#         x = self.classifier(x)
-#         return x
-    
+
 
 from sequence_models.pretrained import load_model_and_alphabet
 from sequence_models.structure import Attention1d
 
 class ESMAttention1d(nn.Module):
     """Outputs of the ESM model with the attention1d"""
-    def __init__(self, max_length, d_embedding, d_out):
+    def __init__(self, d_embedding, d_out):
         super(ESMAttention1d, self).__init__()
         self.attention1d = Attention1d(in_dim=d_embedding) # ???
         self.linear = nn.Linear(d_embedding, d_embedding)
@@ -211,21 +166,21 @@ class ESMAttention1d(nn.Module):
         x = self.final(x)
         return x
     
-class ESMAttention1dMean(nn.Module):
-    """Outputs of the ESM model with averaging"""
-    def __init__(self, max_length, d_embedding, d_out):
-        super(ESMAttention1dMean, self).__init__()
-        self.linear = nn.Linear(d_embedding, d_embedding)
-        self.relu = nn.ReLU()
-        self.final = nn.Linear(d_embedding, d_out)
+# class ESMAttention1d(nn.Module):
+#     """Outputs of the ESM model with averaging"""
+#     def __init__(self, max_length, d_embedding, d_out):
+#         super().__init__()
+#         self.linear = nn.Linear(d_embedding, d_embedding)
+#         self.relu = nn.ReLU()
+#         self.final = nn.Linear(d_embedding, d_out)
     
-    def forward(self, x, input_mask):
-        x = (x*input_mask.unsqueeze(-1)).sum(1) / input_mask.unsqueeze(-1).sum(1)
-        x = self.relu(self.linear(x))
-        x = self.final(x)
-        return x
+#     def forward(self, x, input_mask):
+#         x = (x*input_mask.unsqueeze(-1)).sum(1) / input_mask.unsqueeze(-1).sum(1)
+#         x = self.relu(self.linear(x))
+#         x = self.final(x)
+#         return x
 
-class CARPModel(SequenceModel):
+class CARPModel(SequenceModel): 
     def __init__(
         self,
         fixed_weights,
@@ -243,7 +198,49 @@ class CARPModel(SequenceModel):
 
         self.encoder = model.embedder.requires_grad_(not fixed_weights)
         self.classifier = ESMAttention1d(
-            self.max_length, 
+            self.model_dim, 
+            self.output_dim
+        )
+
+    def unbatch(self, batch):
+        batch_size = len(batch['sequence'])
+        x, = self.collater([[s] for s in batch['sequence']])
+        x = x.to(self.device)
+        x_mask = batch['x_mask']
+        y = batch['y']
+        return (x, x_mask, y), batch_size
+        
+    def forward(self, x, x_mask):
+        x = self.encoder(x, x_mask.unsqueeze(-1))
+        x = self.classifier(x, x_mask)
+        return x
+    
+from esm.pretrained import esm1b_t33_650M_UR50S
+
+# Load ESM-1b model
+# model, alphabet = esm1b_t33_650M_UR50S()
+# batch_converter = alphabet.get_batch_converter()
+
+class ESMModel(SequenceModel): 
+    def __init__(
+        self,
+        fixed_weights,
+        **kwargs
+    ):
+        super().__init__(
+            model_dim=128,
+            model_depth=None,
+            num_residues=None,
+            dropout=None,
+            **kwargs
+        )
+
+        model, self.collater = load_model_and_alphabet('carp_600k')
+
+        self.encoder = model.embedder.requires_grad_(False)
+        self.encoder.eval()
+        
+        self.classifier = ESMAttention1d(
             self.model_dim, 
             self.output_dim
         )
@@ -284,10 +281,34 @@ class MSModel(SequenceModel):
         self.encoder = self.encoder.x_encoder
         self.encoder.requires_grad_(not fixed_weights)
 
-        self.classifier = ESMAttention1d(self.max_length, self.model_dim, self.output_dim)
+        self.classifier = ESMAttention1d(self.model_dim, self.output_dim)
 
     def forward(self, x, x_mask):
         x = self.encoder(x, x_mask.unsqueeze(-1))
         x = self.classifier(x, x_mask)
         return x
 
+import numpy as np
+
+class CARPPretextModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.model, self.collater = load_model_and_alphabet('carp_600k')
+        self.alphabet = self.collater.tokenizer.alphabet
+        self.alphabet = np.array(list(self.alphabet))
+
+    def forward(self, x, x_mask):
+        y = self.model(x, x_mask.unsqueeze(-1))
+        return y
+
+    def predict(self, masked_sequences):
+        x, = self.collater([[s] for s in masked_sequences])
+        x_mask = x != 27
+        x_pred = self(x, x_mask)
+        x_pred = x_pred.argmax(-1)
+        x_pred[~x_mask] = 27
+        x_pred = x_pred.detach().cpu().numpy()
+        x_pred = self.alphabet[x_pred]
+        x_pred = [''.join(_) for _ in x_pred]
+        return x_pred
