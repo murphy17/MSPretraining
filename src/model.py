@@ -92,6 +92,7 @@ class MSTransformer(pl.LightningModule):
         x = self.x_encoder(x, input_mask=x_mask)
         
         y = y.flatten(2)
+        y_mask = y_mask.flatten(2)
         c = c.unsqueeze(1).expand(-1, y.shape[1], -1)
         # y = torch.cat([y,c],-1)
         y = torch.cat([y,y_mask,c],-1)
@@ -117,11 +118,14 @@ class MSTransformer(pl.LightningModule):
         ],-1).float()
 
         y = batch['y']
-
+        y_mask = batch['y_mask']
+        
         # this will affect longer spectra more...?
 #         if self.training and self.dropout > 0:
-#             y_mask = torch.rand_like(y) < self.dropout
-#             y[y_mask] = 0
+#             y_dropout = torch.rand_like(y) < self.dropout
+#             y_dropout[y_mask==0] = 0 # only affect observed peaks
+#             y_mask[y_dropout] = 0 # record they're missing
+#             y[y_dropout] = 0 # and drop them out
         
         # normalize spectrum; for domain reasons, but also fixes dropout ^^ ?
         y = y / y.flatten(1).sum(-1).clamp(1,float('inf')).view(-1,1,1,1,1)
@@ -137,7 +141,6 @@ class MSTransformer(pl.LightningModule):
         x_masked[x_mask] = self.masking_idx
         
         # this is to tell if a zero is real or missing peak
-        y_mask = batch['y_mask']
         y_mask = torch.cat([y_mask.float(),(y_pad+1).float()],1)
         
         # how well does it do with just sequence?
