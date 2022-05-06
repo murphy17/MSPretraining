@@ -16,6 +16,7 @@ def main(args):
         num_nodes=hparams['num_nodes'],
         max_epochs=hparams['max_epochs'],
         precision=hparams['precision'],
+        resume_from_checkpoint=None if hparams['resume_from_checkpoint']=='None' else hparams['resume_from_checkpoint'],
 #         val_check_interval=hparams['val_check_interval'],
         strategy=hparams['strategy'],
         callbacks=[
@@ -64,6 +65,7 @@ if __name__ == "__main__":
     parser.add_argument('--es_monitor',type=str)
     parser.add_argument('--es_mode',type=str)
     parser.add_argument('--es_patience',type=int)
+    parser.add_argument('--resume_from_checkpoint',type=str)
 #     parser.add_argument('--val_check_interval',type=float)
 
     # cluster
