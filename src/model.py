@@ -61,7 +61,7 @@ class MSTransformer(pl.LightningModule):
 
         self.y_encoder = ByteNet(
             n_tokens=1, # unused
-            d_embedding=np.prod(self.output_dim)*2+self.condition_dim,
+            d_embedding=np.prod(self.output_dim)+self.condition_dim,
             d_model=self.model_dim,
             n_layers=self.model_depth,
             kernel_size=self.kernel_size,
@@ -86,20 +86,20 @@ class MSTransformer(pl.LightningModule):
             kernel_size=1
         )
 
-    def forward(self, x, y, c, x_mask, y_mask):
-        x_mask = x_mask.unsqueeze(-1)
+    def forward(self, x, y, c, padding_mask):
+        padding_mask = padding_mask.unsqueeze(-1)
 
-        x = self.x_encoder(x, input_mask=x_mask)
+        x = self.x_encoder(x, input_mask=padding_mask)
         
         y = y.flatten(2)
-        y_mask = y_mask.flatten(2)
+#         y_mask = y_mask.flatten(2)
         c = c.unsqueeze(1).expand(-1, y.shape[1], -1)
-        # y = torch.cat([y,c],-1)
-        y = torch.cat([y,y_mask,c],-1)
-        y = self.y_encoder(y, input_mask=x_mask)
+        y = torch.cat([y,c],-1)
+#         y = torch.cat([y,y_mask,c],-1)
+        y = self.y_encoder(y, input_mask=padding_mask)
 
         z = torch.cat([x,y],-1)
-        z = self.conv1(z, input_mask=x_mask)
+        z = self.conv1(z, input_mask=padding_mask)
         z = self.relu(z)
         x_pred = self.conv2(z)
 
@@ -135,20 +135,21 @@ class MSTransformer(pl.LightningModule):
 
         # to start, just a single AA
         masking_idx = torch.multinomial(padding_mask.float(), 1).squeeze()
-        x_mask = torch.zeros_like(padding_mask,dtype=torch.bool)
-        x_mask[range(batch_size),masking_idx] = 1
+        x_dropout = torch.zeros_like(padding_mask,dtype=torch.bool)
+        x_dropout[range(batch_size),masking_idx] = 1
         x_masked = x.clone()
-        x_masked[x_mask] = self.masking_idx
+        x_masked[x_dropout] = self.masking_idx
         
         # this is to tell if a zero is real or missing peak
-        y_mask = torch.cat([y_mask.float(),(y_pad+1).float()],1)
+#         y_mask = torch.cat([y_mask.float(),(y_pad+1).float()],1)
         
         # how well does it do with just sequence?
         if self.dropout == 1:
             y = torch.zeros_like(y)
             c = torch.zeros_like(c)
 
-        x_pred = self(x_masked, y, c, x_mask=padding_mask, y_mask=y_mask)
+#         x_pred = self(x_masked, y, c, x_mask=padding_mask, y_mask=y_mask)
+        x_pred = self(x_masked, y, c, padding_mask)
         
         # kludge
         if step == 'predict':
